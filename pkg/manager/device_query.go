@@ -412,6 +412,119 @@ func (m *Manager) UIMChangeProvisioningSession(ctx context.Context, req qmi.UIMC
 	})
 }
 
+type UIMPostSwitchReloadOptions struct {
+	DefaultSlot    uint8
+	PowerCycleWait time.Duration
+}
+
+func normalizeUIMPostSwitchReloadOptions(opts UIMPostSwitchReloadOptions) UIMPostSwitchReloadOptions {
+	if opts.DefaultSlot == 0 {
+		opts.DefaultSlot = 1
+	}
+	if opts.PowerCycleWait <= 0 {
+		opts.PowerCycleWait = 500 * time.Millisecond
+	}
+	return opts
+}
+
+func resolveUIMReloadSlot(readiness UIMReadiness, defaultSlot uint8) uint8 {
+	if readiness.SlotKnown && readiness.ActiveSlot != 0 {
+		return readiness.ActiveSlot
+	}
+	if defaultSlot != 0 {
+		return defaultSlot
+	}
+	return 1
+}
+
+func (m *Manager) UIMPowerCycleSIM(ctx context.Context, slot uint8, wait time.Duration) error {
+	if slot == 0 {
+		slot = 1
+	}
+	if wait <= 0 {
+		wait = 500 * time.Millisecond
+	}
+	if err := m.UIMPowerOffSIM(ctx, slot); err != nil {
+		return fmt.Errorf("UIMPowerOffSIM(slot=%d): %w", slot, err)
+	}
+	if err := sleepWithContext(ctx, wait); err != nil {
+		return err
+	}
+	if err := m.UIMPowerOnSIM(ctx, slot); err != nil {
+		return fmt.Errorf("UIMPowerOnSIM(slot=%d): %w", slot, err)
+	}
+	if err := sleepWithContext(ctx, wait); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *Manager) UIMRebindPrimaryGWProvisioning(ctx context.Context, slot uint8, usimAID []byte) error {
+	return uimRebindPrimaryGWProvisioningWithSender(ctx, slot, usimAID, 200*time.Millisecond, m.UIMChangeProvisioningSession)
+}
+
+func uimRebindPrimaryGWProvisioningWithSender(ctx context.Context, slot uint8, usimAID []byte, wait time.Duration, send func(context.Context, qmi.UIMChangeProvisioningSessionRequest) error) error {
+	if slot == 0 {
+		slot = 1
+	}
+	if len(usimAID) == 0 {
+		return fmt.Errorf("USIM AID is required for provisioning rebind")
+	}
+	if send == nil {
+		return fmt.Errorf("UIM provisioning sender unavailable")
+	}
+	if err := send(ctx, qmi.UIMChangeProvisioningSessionRequest{
+		SessionType: qmi.UIMSessionTypePrimaryGWProvisioning,
+		Activate:    false,
+	}); err != nil {
+		return fmt.Errorf("deactivate PrimaryGW provisioning: %w", err)
+	}
+	if err := sleepWithContext(ctx, wait); err != nil {
+		return err
+	}
+	if err := send(ctx, qmi.UIMChangeProvisioningSessionRequest{
+		SessionType:           qmi.UIMSessionTypePrimaryGWProvisioning,
+		Activate:              true,
+		Slot:                  &slot,
+		ApplicationIdentifier: append([]byte(nil), usimAID...),
+	}); err != nil {
+		return fmt.Errorf("activate PrimaryGW provisioning: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) UIMPostSwitchReload(ctx context.Context, readiness UIMReadiness, opts UIMPostSwitchReloadOptions) (uint8, error) {
+	opts = normalizeUIMPostSwitchReloadOptions(opts)
+	slot := resolveUIMReloadSlot(readiness, opts.DefaultSlot)
+	if err := m.UIMPowerCycleSIM(ctx, slot, opts.PowerCycleWait); err != nil {
+		return slot, err
+	}
+	if _, err := m.EnsureSIMProvisioned(ctx, EnsureSIMProvisionedOptions{
+		DefaultSlot:      slot,
+		MaxAttempts:      4,
+		MaxActivations:   1,
+		PollInterval:     400 * time.Millisecond,
+		ActivationSettle: 1500 * time.Millisecond,
+	}); err != nil {
+		return slot, err
+	}
+	return slot, nil
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 // UIMRefreshRegister 注册 UIM refresh 文件列表
 func (m *Manager) UIMRefreshRegister(ctx context.Context, req qmi.UIMRefreshRegisterRequest) error {
 	return m.withUIMRecovery("UIMRefreshRegister", func(uim *qmi.UIMService) error {

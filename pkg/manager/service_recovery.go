@@ -203,6 +203,33 @@ func (m *Manager) triggerCoreRecoveryFromService(service string, op string, phas
 	m.enqueueModemResetEvent(strings.ToLower(service) + "_recovery")
 }
 
+// RequestCoreRecovery asks the manager to run the same core recovery path used
+// for modem reset/service-failure handling. It is intended for higher-level
+// flows that have already classified a service stall, such as post-eSIM-switch
+// convergence.
+func (m *Manager) RequestCoreRecovery(reason string) bool {
+	if m == nil {
+		return false
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "external_request"
+	}
+
+	m.mu.RLock()
+	coreReady := m.coreReady
+	stopping := m.state == StateStopping
+	m.mu.RUnlock()
+	if !coreReady || stopping {
+		return false
+	}
+
+	cause := fmt.Errorf("%s", reason)
+	m.logServiceRecovery("POST_SWITCH", reason, "recover-core", cause, "Scheduling core recovery due to explicit request")
+	m.enqueueModemResetEvent("post_switch_recovery")
+	return true
+}
+
 func (m *Manager) maybeReplayWMSStateAfterRebind(reason string) {
 	m.wmsReplayMu.Lock()
 	if m.wmsReplayInProgress {

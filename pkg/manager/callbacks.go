@@ -50,6 +50,7 @@ const (
 	EventNASEventReport                                         // NAS event report / NAS 事件报告
 	EventUnknownIndication                                      // Unknown indication / 未知指示
 	EventVoiceSupplementaryServiceRequest                       // Voice supplementary service request indication / 语音补充业务请求指示
+	EventRecoveryExhausted                                      // qmi-go 内部核心恢复已彻底放弃 / core recovery abandoned
 )
 
 func (e EventType) String() string {
@@ -118,9 +119,11 @@ func (e EventType) String() string {
 		return "UIMRefresh"
 	case EventUIMSlotStatus:
 		return "UIMSlotStatus"
-	case EventUnknownIndication:
-		return "UnknownIndication"
-	default:
+case EventUnknownIndication:
+	return "UnknownIndication"
+case EventRecoveryExhausted:
+	return "RecoveryExhausted"
+default:
 		return "Unknown"
 	}
 }
@@ -161,6 +164,7 @@ type Event struct {
 	RawQMIType                qmi.EventType                                   // Raw QMI event type / 原始 QMI 事件类型
 	ServiceID                 uint8                                           // QMI service id / QMI 服务 ID
 	MessageID                 uint16                                          // QMI message id / QMI 消息 ID
+	Reason                    string                                          // 终态/诊断原因，如 device_removed / recovery_exhausted
 }
 
 // EventHandler is a callback function for connection events / EventHandler 是连接事件的回调函数

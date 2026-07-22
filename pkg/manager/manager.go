@@ -121,6 +121,8 @@ type RecoveryPolicy struct {
 	ServiceTimeoutThreshold       int
 	ServiceTimeoutWindow          time.Duration
 	ServiceRecoverCooldown        time.Duration
+	MaxRecoverAttempts            int           // >0 时，核心恢复连续重试超过该次数即放弃并发终态事件；0 = 无限（默认，向后兼容）
+	MaxRecoverElapsed             time.Duration // >0 时，自首次恢复失败起超过该时长即放弃并发终态事件；0 = 不启用（默认）
 }
 
 type ManagerStats struct {
@@ -189,8 +191,9 @@ type Manager struct {
 	retryDelays  []time.Duration
 	reinitDelays []time.Duration
 	isRotating   bool // Flag to suppress status checks during IP rotation / 标志位: IP轮换期间抑制状态检查
-	recoverCount int
-	lastIPCheck  time.Time
+	recoverCount       int
+	recoverFirstFailAt time.Time // 本轮连续恢复失败的首次时间，用于 MaxRecoverElapsed 判据
+	lastIPCheck        time.Time
 
 	// Internal notification / 内部通知
 	regNotify chan bool // For fast registration detection / 用于快速注册检测
@@ -3063,6 +3066,13 @@ func (m *Manager) doRecoverFromModemReset() bool {
 		m.markCoreNotReadyLocked("recover_reinit_services", openErr)
 		m.mu.Unlock()
 		m.setState(StateDisconnected)
+		if m.isControlDeviceGone() {
+			m.log.WithError(openErr).Warn("Control device node missing; emitting device_removed terminal event")
+			m.recoverCount = 0
+			m.recoverFirstFailAt = time.Time{}
+			m.emitEvent(Event{Type: EventRecoveryExhausted, State: StateDisconnected, Error: openErr, Reason: "device_removed"})
+			return false
+		}
 		m.scheduleRecoverRetry("reinit_failed")
 		return false
 	}
@@ -3112,6 +3122,7 @@ func (m *Manager) doRecoverFromModemReset() bool {
 	}
 
 	m.recoverCount = 0
+	m.recoverFirstFailAt = time.Time{}
 	m.recoverBackoffMs.Store(0)
 	m.recoverSuccess.Add(1)
 
@@ -3199,8 +3210,45 @@ func (m *Manager) waitIdentityReadable(ctx context.Context) error {
 	}
 }
 
+// isControlDeviceGone 仅在配置了控制口路径且该节点确实不存在时返回 true。
+func (m *Manager) isControlDeviceGone() bool {
+	path := m.cfg.Device.ControlPath
+	if path == "" {
+		return false
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return true
+	}
+	return false
+}
+
+// recoveryExhausted 判断核心恢复是否应放弃重试（仅在策略启用时返回 true）。
+func (m *Manager) recoveryExhausted() bool {
+	p := m.cfg.RecoveryPolicy
+	if p.MaxRecoverAttempts > 0 && m.recoverCount > p.MaxRecoverAttempts {
+		return true
+	}
+	if p.MaxRecoverElapsed > 0 && !m.recoverFirstFailAt.IsZero() &&
+		time.Since(m.recoverFirstFailAt) >= p.MaxRecoverElapsed {
+		return true
+	}
+	return false
+}
+
 func (m *Manager) scheduleRecoverRetry(reason string) {
 	m.recoverCount++
+	if m.recoverFirstFailAt.IsZero() {
+		m.recoverFirstFailAt = time.Now()
+	}
+	if m.recoveryExhausted() {
+		m.log.WithField("reason", reason).
+			WithField("attempts", m.recoverCount).
+			Warn("Core recovery exhausted; emitting terminal event and stopping retries")
+		m.recoverCount = 0
+		m.recoverFirstFailAt = time.Time{}
+		m.emitEvent(Event{Type: EventRecoveryExhausted, State: StateDisconnected, Reason: "recovery_exhausted"})
+		return
+	}
 	delay := m.getRecoverDelay()
 	m.log.WithField("reason", reason).Infof("Will retry reinit with backoff in %v (attempt=%d)", delay, m.recoverCount)
 	m.scheduleAfter(delay, func() {

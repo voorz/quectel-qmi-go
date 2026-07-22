@@ -101,6 +101,13 @@ const (
 	UIMAppTypeISIM    uint8 = 5
 )
 
+// QMI card application state（权威值来自 libqmi qmi-enums-uim.h）
+const (
+	UIMAppStateUnknown  uint8 = 0
+	UIMAppStateDetected uint8 = 1
+	UIMAppStateReady    uint8 = 7
+)
+
 var (
 	uimUSIMAIDPrefix = []byte{0xA0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x02}
 	uimISIMAIDPrefix = []byte{0xA0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x04}

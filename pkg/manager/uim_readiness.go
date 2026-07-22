@@ -17,6 +17,7 @@ const (
 	UIMReadinessCardResetting      UIMReadinessReason = "card_resetting"
 	UIMReadinessSIMBlocked         UIMReadinessReason = "sim_blocked"
 	UIMReadinessIdentityEmpty      UIMReadinessReason = "identity_empty"
+	UIMReadinessNeedsProvisioning  UIMReadinessReason = "needs_provisioning"
 )
 
 type UIMReadiness struct {
@@ -28,9 +29,12 @@ type UIMReadiness struct {
 	ActiveSlot     uint8
 	SlotKnown      bool
 	SlotSource     string
-	ICCID          string
-	IMSI           string
-	Reason         UIMReadinessReason
+	ICCID              string
+	IMSI               string
+	AppState           uint8
+	ProvisioningActive bool
+	NeedsProvisioning  bool
+	Reason             UIMReadinessReason
 	Err            error
 }
 
