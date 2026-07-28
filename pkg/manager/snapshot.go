@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/iniwex5/quectel-qmi-go/pkg/qmi"
+	"github.com/voorz/quectel-qmi-go/pkg/qmi"
 )
 
 // ============================================================================

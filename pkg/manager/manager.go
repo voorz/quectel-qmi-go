@@ -15,8 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/iniwex5/quectel-qmi-go/pkg/netcfg"
-	"github.com/iniwex5/quectel-qmi-go/pkg/qmi"
+	"github.com/voorz/quectel-qmi-go/pkg/netcfg"
+	"github.com/voorz/quectel-qmi-go/pkg/qmi"
 	"github.com/warthog618/sms"
 	"github.com/warthog618/sms/encoding/tpdu"
 	"github.com/warthog618/sms/encoding/ucs2"

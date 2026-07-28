@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/iniwex5/quectel-qmi-go/pkg/qmi"
+	"github.com/voorz/quectel-qmi-go/pkg/qmi"
 )
 
 // EnsureSIMProvisionedOptions 控制 provisioning 收敛的轮询节奏。

@@ -247,7 +247,7 @@ func (p *ModemPool) StopAll() {
 // DiscoverAndAdd discovers modems and adds them to pool / DiscoverAndAdd 发现模组并添加到池
 func (p *ModemPool) DiscoverAndAdd(baseCfg Config, logger Logger) (int, error) {
 	if discoverModemsFn == nil {
-		return 0, fmt.Errorf("no device discoverer registered; import github.com/iniwex5/quectel-qmi-go/pkg/device or inject devices manually")
+		return 0, fmt.Errorf("no device discoverer registered; import github.com/voorz/quectel-qmi-go/pkg/device or inject devices manually")
 	}
 	modems, err := discoverModemsFn()
 	if err != nil {
