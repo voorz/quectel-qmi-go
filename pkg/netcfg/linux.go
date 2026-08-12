@@ -7,10 +7,14 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/voorz/netlink"
 )
+
+var sysClassNetRoot = "/sys/class/net"
 
 // LinuxConfigurator implements NetworkConfigurator for Linux using netlink
 // LinuxConfigurator 使用 netlink 实现 Linux 的 NetworkConfigurator
@@ -360,4 +364,19 @@ func (l *LinuxConfigurator) EnableRawIP(ifname string) error {
 	}
 
 	return nil
+}
+
+// parseMuxIDAttr parses qmap/mux_id, which the kernel reports as either
+// "0xN" or a plain decimal string depending on driver version.
+func parseMuxIDAttr(s string) (uint8, error) {
+	base := 10
+	if strings.HasPrefix(s, "0x") {
+		s = s[2:]
+		base = 16
+	}
+	v, err := strconv.ParseUint(s, base, 8)
+	if err != nil {
+		return 0, err
+	}
+	return uint8(v), nil
 }

@@ -27,6 +27,7 @@ const (
 	EventNASSignalInfoChanged                            // NAS signal info changed / NAS 信号信息变化
 	EventNASNetworkReject                                // NAS network reject / NAS 驻网拒绝
 	EventNASIncrementalNetworkScan                       // NAS incremental network scan / NAS 增量搜网
+	EventNASCellLocationInfoChanged                      // NAS cell location info / NAS 小区信息变化
 	EventModemReset                                      // CTL revoke client ID (modem reset) / CTL撤销客户端ID (modem重置)
 	EventNewMessage                                      // WMS new message / WMS新消息
 	EventWMSSMSCAddress                                  // WMS SMSC address indication / WMS 短信中心地址指示
@@ -68,6 +69,7 @@ type ClientLogFunc func(level ClientLogLevel, format string, args ...any)
 // ClientOptions controls runtime behavior for the low-level QMI client.
 type ClientOptions struct {
 	SyncOnOpen            bool
+	QueryVersionOnOpen    bool // 启动时自动查询服务版本信息
 	ReadDeadline          time.Duration
 	DefaultRequestTimeout time.Duration
 	TxQueueSize           int
@@ -77,13 +79,18 @@ type ClientOptions struct {
 	ProxyExecutable       string
 	ProxyOpenTimeout      time.Duration
 	ProxyFallbackToRaw    bool
-	Logf                  ClientLogFunc
+	// UseQRTR opens a native QRTR (AF_QIPCRTR) transport instead of a
+	// /dev/cdc-wdm* device or qmi-proxy socket. It takes precedence over
+	// UseProxy.
+	UseQRTR bool
+	Logf    ClientLogFunc
 }
 
 // DefaultClientOptions returns the production defaults used by NewClientWithOptions.
 func DefaultClientOptions() ClientOptions {
 	return ClientOptions{
 		SyncOnOpen:            true,
+		QueryVersionOnOpen:    true,
 		ReadDeadline:          100 * time.Millisecond,
 		DefaultRequestTimeout: 30 * time.Second,
 		TxQueueSize:           128,
@@ -146,6 +153,10 @@ type Client struct {
 	path string
 	opts ClientOptions
 
+	// 服务版本缓存 (由 GetServiceVersions 填充)
+	serviceVersions map[uint8]ServiceVersion
+	versionQueried  bool
+
 	// Transaction management / 事务管理
 	mu                     sync.Mutex
 	transactions           map[uint32]*transactionEntry
@@ -175,6 +186,8 @@ type Client struct {
 	coalescedIndications   atomic.Uint64
 	droppedEdgeIndications atomic.Uint64
 }
+
+var openQRTRTransportHook = openQRTRTransport
 
 func normalizeClientOptions(opts ClientOptions) ClientOptions {
 	defaults := DefaultClientOptions()
@@ -207,6 +220,13 @@ func normalizeClientOptions(opts ClientOptions) ClientOptions {
 		opts.TxQueueSize == defaults.TxQueueSize &&
 		opts.IndicationQueueSize == defaults.IndicationQueueSize {
 		opts.SyncOnOpen = defaults.SyncOnOpen
+	}
+	if !opts.QueryVersionOnOpen &&
+		opts.ReadDeadline == defaults.ReadDeadline &&
+		opts.DefaultRequestTimeout == defaults.DefaultRequestTimeout &&
+		opts.TxQueueSize == defaults.TxQueueSize &&
+		opts.IndicationQueueSize == defaults.IndicationQueueSize {
+		opts.QueryVersionOnOpen = defaults.QueryVersionOnOpen
 	}
 	return opts
 }
@@ -244,7 +264,10 @@ func NewClientWithOptions(ctx context.Context, path string, opts ClientOptions) 
 		conn qmiTransport
 		err  error
 	)
-	if opts.UseProxy {
+	switch {
+	case opts.UseQRTR:
+		conn, err = openQRTRTransportHook(openCtx, opts)
+	case opts.UseProxy:
 		conn, err = openProxyTransportHook(openCtx, opts)
 		if err != nil && opts.ProxyFallbackToRaw {
 			logClientOption(opts, ClientLogLevelWarn, "QMI: qmi-proxy transport unavailable, falling back to raw QMI for %s: %v", path, err)
@@ -254,7 +277,7 @@ func NewClientWithOptions(ctx context.Context, path string, opts ClientOptions) 
 				return nil, fmt.Errorf("qmi-proxy unavailable and raw QMI fallback failed for %s: %w", path, err)
 			}
 		}
-	} else {
+	default:
 		conn, err = openRawTransportHook(path)
 	}
 	if err != nil {
@@ -263,7 +286,7 @@ func NewClientWithOptions(ctx context.Context, path string, opts ClientOptions) 
 
 	c := newClientWithTransport(path, opts, conn)
 
-	if opts.UseProxy {
+	if opts.UseProxy && !opts.UseQRTR {
 		if err := c.openProxyDevice(openCtx, path); err != nil {
 			if opts.ProxyFallbackToRaw {
 				_ = c.Close()
@@ -282,8 +305,9 @@ func NewClientWithOptions(ctx context.Context, path string, opts ClientOptions) 
 		}
 	}
 
-	// Initial sync (non-fatal, helps clear modem state) / 初始同步 (非致命，有助于清除modem状态)
-	if opts.SyncOnOpen {
+	// CTL SYNC releases client IDs allocated on the endpoint, so it must not run
+	// through qmi-proxy where the endpoint is shared with other processes.
+	if c.opts.SyncOnOpen && (!c.opts.UseProxy || c.opts.UseQRTR) {
 		syncCtx := ctx
 		if syncCtx == nil {
 			syncCtx = context.Background()
@@ -298,7 +322,60 @@ func NewClientWithOptions(ctx context.Context, path string, opts ClientOptions) 
 		}
 	}
 
+	// Query version info (non-fatal) / 查询版本信息 (非致命)
+	if opts.QueryVersionOnOpen {
+		versionCtx := ctx
+		if versionCtx == nil {
+			versionCtx = context.Background()
+		}
+		if _, hasDeadline := versionCtx.Deadline(); !hasDeadline {
+			var cancel context.CancelFunc
+			versionCtx, cancel = context.WithTimeout(versionCtx, 5*time.Second)
+			defer cancel()
+		}
+		if versions, err := c.GetServiceVersions(versionCtx); err != nil {
+			c.logf(ClientLogLevelDebug, "QMI: version info query failed (non-fatal): %v", err)
+		} else {
+			c.serviceVersions = ServiceVersionMap(versions)
+			c.versionQueried = true
+			c.logf(ClientLogLevelDebug, "QMI: modem supports %d QMI services", len(versions))
+		}
+	}
+
 	return c, nil
+}
+
+// HasService 查询 modem 是否支持指定的 QMI 服务。
+// 如果尚未执行版本查询，返回 true（乐观假设）。
+func (c *Client) HasService(service uint8) bool {
+	if !c.versionQueried {
+		return true
+	}
+	_, ok := c.serviceVersions[service]
+	return ok
+}
+
+func (c *Client) ensureServiceAllocatable(service uint8) error {
+	if !c.versionQueried {
+		return nil
+	}
+	if _, ok := c.serviceVersions[service]; ok {
+		return nil
+	}
+	return ErrServiceNotSupported
+}
+
+// GetCachedServiceVersions 返回缓存的服务版本信息。
+// 如果尚未查询过，返回 nil。
+func (c *Client) GetCachedServiceVersions() map[uint8]ServiceVersion {
+	if !c.versionQueried {
+		return nil
+	}
+	result := make(map[uint8]ServiceVersion, len(c.serviceVersions))
+	for k, v := range c.serviceVersions {
+		result[k] = v
+	}
+	return result
 }
 
 func newClientWithTransport(path string, opts ClientOptions, conn qmiTransport) *Client {
@@ -506,9 +583,9 @@ func (c *Client) readLoop() {
 			if len(pending) < 3 {
 				break
 			}
-			if pending[0] != 0x01 {
+			if pending[0] != 0x01 && pending[0] != 0x02 {
 				i := 0
-				for i < len(pending) && pending[i] != 0x01 {
+				for i < len(pending) && pending[i] != 0x01 && pending[i] != 0x02 {
 					i++
 				}
 				if i == len(pending) {
@@ -755,6 +832,8 @@ func (c *Client) dispatchIndication(p *Packet) {
 		eventType = EventNASNetworkReject
 	case p.ServiceType == ServiceNAS && p.MessageID == NASIncrementalNetworkScanInd:
 		eventType = EventNASIncrementalNetworkScan
+	case p.ServiceType == ServiceNAS && p.MessageID == NASGetCellLocationInfo:
+		eventType = EventNASCellLocationInfoChanged
 	case p.ServiceType == ServiceWMS && p.MessageID == WMSEventReportInd:
 		eventType = EventNewMessage
 	case p.ServiceType == ServiceWMS && p.MessageID == WMSSMSCAddressInd:
@@ -805,15 +884,17 @@ func (c *Client) handleClientIDRevoke(p *Packet) {
 		return
 	}
 	tlv := FindTLV(p.TLVs, 0x01)
-	if tlv == nil || len(tlv.Value) < 2 {
+	if tlv == nil {
 		return
 	}
-	service := tlv.Value[0]
-	clientID := tlv.Value[1]
+	service, clientID, ok := decodeCTLServiceClientIDTLV(tlv.Value)
+	if !ok {
+		return
+	}
 
 	c.mu.Lock()
-	if cached, ok := c.clientIDs[service]; ok && cached == clientID {
-		delete(c.clientIDs, service)
+	if cached, ok := c.clientIDs[uint8(service)]; ok && cached == clientID {
+		delete(c.clientIDs, uint8(service))
 	}
 	c.mu.Unlock()
 }
@@ -925,7 +1006,7 @@ func (c *Client) SendRequest(ctx context.Context, service uint8, clientID uint8,
 
 // Sync sends a QMI CTL sync request / Sync发送QMI CTL同步请求
 func (c *Client) Sync(ctx context.Context) error {
-	_, err := c.SendRequest(ctx, ServiceControl, 0, 0x0027, nil) // 0x0027 = QMICTL_SYNC_REQ
+	_, err := c.SendRequest(ctx, ServiceControl, 0, CTLSync, nil)
 	return err
 }
 
@@ -950,12 +1031,16 @@ func (c *Client) AllocateClientID(service uint8) (uint8, error) {
 }
 
 func (c *Client) AllocateClientIDWithContext(ctx context.Context, service uint8) (uint8, error) {
+	if err := c.ensureServiceAllocatable(service); err != nil {
+		return 0, err
+	}
+
 	var lastErr error
 	for retry := 0; retry < 3; retry++ {
 		attemptCtx, attemptCancel := context.WithTimeout(ctx, 20*time.Second)
 
 		// Build request: TLV 0x01 = service type / 构建请求: TLV 0x01 = 服务类型
-		tlvs := []TLV{NewTLVUint8(0x01, service)}
+		tlvs := []TLV{encodeCTLServiceOnlyTLV(uint16(service))}
 
 		resp, err := c.SendRequest(attemptCtx, ServiceControl, 0, CTLGetClientID, tlvs)
 		attemptCancel()
@@ -966,11 +1051,14 @@ func (c *Client) AllocateClientIDWithContext(ctx context.Context, service uint8)
 
 			// Parse response TLV 0x01: {service, clientID} / 解析响应 TLV 0x01: {服务, clientID}
 			tlv := FindTLV(resp.TLVs, 0x01)
-			if tlv == nil || len(tlv.Value) < 2 {
+			if tlv == nil {
+				return 0, fmt.Errorf("invalid response TLV")
+			}
+			_, clientID, ok := decodeCTLServiceClientIDTLV(tlv.Value)
+			if !ok {
 				return 0, fmt.Errorf("invalid response TLV")
 			}
 
-			clientID := tlv.Value[1]
 			c.mu.Lock()
 			c.clientIDs[service] = clientID
 			c.mu.Unlock()
@@ -996,7 +1084,7 @@ func (c *Client) ReleaseClientID(service uint8, clientID uint8) error {
 
 func (c *Client) ReleaseClientIDWithContext(ctx context.Context, service uint8, clientID uint8) error {
 	// Build request: TLV 0x01 = {service, clientID} / 构建请求: TLV 0x01 = {服务, clientID}
-	tlvs := []TLV{{Type: 0x01, Value: []byte{service, clientID}}}
+	tlvs := []TLV{encodeCTLServiceClientIDTLV(uint16(service), clientID)}
 
 	resp, err := c.SendRequest(ctx, ServiceControl, 0, CTLReleaseClientID, tlvs)
 	if err != nil {

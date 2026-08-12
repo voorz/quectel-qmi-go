@@ -177,3 +177,13 @@ func IsTimeoutError(err error) bool {
 	_, ok := err.(*TimeoutError)
 	return ok
 }
+
+// ============================================================================
+// Sentinel errors for transport-level capability checks
+// ============================================================================
+
+// ErrServiceNotSupported is returned when a QMI service is not supported by the hardware.
+var ErrServiceNotSupported = errors.New("qmi service not supported by hardware")
+
+// ErrQRTRUnsupported is returned when QRTR (AF_QIPCRTR) transport is not available on this platform.
+var ErrQRTRUnsupported = errors.New("qmi: QRTR (AF_QIPCRTR) transport is unsupported on this platform")

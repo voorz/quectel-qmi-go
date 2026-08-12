@@ -15,7 +15,11 @@ type IMSService struct {
 }
 
 func NewIMSService(client *Client) (*IMSService, error) {
-	clientID, err := client.AllocateClientID(ServiceIMS)
+	return NewIMSServiceWithContext(context.Background(), client)
+}
+
+func NewIMSServiceWithContext(ctx context.Context, client *Client) (*IMSService, error) {
+	clientID, err := client.AllocateClientIDWithContext(ctx, ServiceIMS)
 	if err != nil {
 		return nil, err
 	}

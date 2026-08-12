@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"strings"
 )
 
 const (
@@ -15,6 +16,7 @@ const (
 	WDSGetDataBearerTechnology        uint16 = 0x0037
 	WDSGetCurrentDataBearerTechnology uint16 = 0x0044
 	WDSSetAutoconnectSettings         uint16 = 0x0051
+	WDSBindDataPort                   uint16 = 0x0089
 	/* Defined in frame.go / 在 frame.go 中定义
 	WDSGetCurrentChannelRate uint16 = 0x0023
 	WDSGetPktStatistics      uint16 = 0x0024
@@ -39,6 +41,13 @@ const (
 	TLVWDSPrimaryDNSv6   uint8 = 0x27
 	TLVWDSSecondaryDNSv6 uint8 = 0x28
 	TLVWDSMtu            uint8 = 0x29
+	TLVWDSIPv6DelegatedPrefix uint8 = 0x57
+	// P-CSCF / IMCN TLVs (from libqmi qmi-service-wds.json)
+	TLVWDSPCSCFUsingPCO         uint8 = 0x22
+	TLVWDSPCSCFServerAddrList   uint8 = 0x23
+	TLVWDSPCSCFDomainList       uint8 = 0x24
+	TLVWDSIMCNFlag              uint8 = 0x2C
+	TLVWDSPCSCFServerAddrListV6 uint8 = 0x2E
 )
 
 // Runtime settings mask bits / 运行时设置掩码位
@@ -59,6 +68,9 @@ const (
 	RuntimeMaskMTU         uint32 = 1 << 13
 	RuntimeMaskDomainName  uint32 = 1 << 14
 	RuntimeMaskIPFamily    uint32 = 1 << 15
+	RuntimeMaskIMCN        uint32 = 1 << 16
+	RuntimeMaskExtendedTechnology  uint32 = 1 << 17
+	RuntimeMaskOperatorReservedPCO uint32 = 1 << 18
 )
 
 // ============================================================================
@@ -70,6 +82,8 @@ type WDSService struct {
 	clientID             uint8
 	ProfileIndex         uint8
 	TechnologyPreference uint16 // Bitmask: 0x8000=3GPP, 0x4000=3GPP2
+	CallType             uint8 // WDS TLV 0x35 (0=laptop, 1=embedded)
+	HasCallType          bool  // gates CallType since 0 is a valid value
 }
 
 const AnyPacketDataHandle uint32 = ^uint32(0)
@@ -95,6 +109,39 @@ type CallEndReason struct {
 	Code uint16
 }
 
+// Verbose call end reason types and codes, from libqmi's
+// QmiWdsVerboseCallEndReasonType / QmiWdsVerboseCallEndReason*
+const (
+	CallEndReasonTypeInternal uint16 = 2
+
+	CallEndReasonInternalPDNIPv4CallDisallowed     uint16 = 208
+	CallEndReasonInternalPDNIPv6CallDisallowed     uint16 = 210
+	CallEndReasonInternalMMGSDICardEvent           uint16 = 218
+	CallEndReasonInternalIPVersionMismatch         uint16 = 231
+	CallEndReasonInternalInterfaceInUseConfigMatch uint16 = 241
+)
+
+func (r *CallEndReason) IsInterfaceInUseConfigMatch() bool {
+	return r != nil &&
+		r.Type == CallEndReasonTypeInternal &&
+		r.Code == CallEndReasonInternalInterfaceInUseConfigMatch
+}
+
+func (r *CallEndReason) IsIPFamilyDisallowed() bool {
+	if r == nil || r.Type != CallEndReasonTypeInternal {
+		return false
+	}
+	return r.Code == CallEndReasonInternalPDNIPv4CallDisallowed ||
+		r.Code == CallEndReasonInternalPDNIPv6CallDisallowed ||
+		r.Code == CallEndReasonInternalIPVersionMismatch
+}
+
+func (r *CallEndReason) IsAbortedByCardEvent() bool {
+	return r != nil &&
+		r.Type == CallEndReasonTypeInternal &&
+		r.Code == CallEndReasonInternalMMGSDICardEvent
+}
+
 type StartNetworkError struct {
 	Err    error
 	Reason *CallEndReason
@@ -116,6 +163,17 @@ func (e *StartNetworkError) Error() string {
 func (e *StartNetworkError) Unwrap() error {
 	return e.Err
 }
+
+const (
+	WDSCallTypeLaptop   uint8 = 0
+	WDSCallTypeEmbedded uint8 = 1
+)
+
+const (
+	WDSSIOPortNone          uint16 = 0x0000
+	WDSSIOPortA2MuxRMNET0   uint16 = 0x0e04
+	WDSSIOPortA2MuxRMNETMax uint16 = 0x0e0b
+)
 
 // MuxBinding info for QMAP / QMAP 的 Mux 绑定信息
 type MuxBinding struct {
@@ -310,42 +368,7 @@ func (w *WDSService) StartNetworkInterface(ctx context.Context, apn string, user
 		// Non-fatal, continue / 非致命，继续
 	}
 
-	var tlvs []TLV
-
-	// TLV 0x14: APN name / TLV 0x14: APN名称
-	if apn != "" {
-		tlvs = append(tlvs, NewTLVString(0x14, apn))
-	}
-
-	// TLV 0x17: Username / TLV 0x17: 用户名
-	if username != "" {
-		tlvs = append(tlvs, NewTLVString(0x17, username))
-	}
-
-	// TLV 0x18: Password / TLV 0x18: 密码
-	if password != "" {
-		tlvs = append(tlvs, NewTLVString(0x18, password))
-	}
-
-	// TLV 0x16: Authentication type (0=none, 1=PAP, 2=CHAP, 3=PAP|CHAP) / TLV 0x16: 认证类型
-	if authType != 0 {
-		tlvs = append(tlvs, NewTLVUint8(0x16, authType))
-	}
-
-	// TLV 0x19: IP family preference / TLV 0x19: IP族偏好
-	tlvs = append(tlvs, NewTLVUint8(0x19, ipFamily))
-
-	// TLV 0x30: Profile Index / Profile 索引 (Optional)
-	if w.ProfileIndex > 0 {
-		tlvs = append(tlvs, NewTLVUint8(0x30, w.ProfileIndex))
-	}
-
-	// TLV 0x34: Technology Preference / 技术偏好 (Optional)
-	if w.TechnologyPreference > 0 {
-		buf := make([]byte, 2)
-		binary.LittleEndian.PutUint16(buf, w.TechnologyPreference)
-		tlvs = append(tlvs, TLV{Type: 0x34, Value: buf})
-	}
+	tlvs := buildStartNetworkTLVs(apn, username, password, authType, ipFamily, w.ProfileIndex, w.TechnologyPreference, w.CallType, w.HasCallType)
 
 	resp, err := w.client.SendRequest(ctx, ServiceWDS, w.clientID, WDSStartNetworkInterface, tlvs)
 	if err != nil {
@@ -406,6 +429,35 @@ func buildStopNetworkInterfaceTLVs(opts StopNetworkInterfaceOptions) []TLV {
 	return tlvs
 }
 
+func buildStartNetworkTLVs(apn, username, password string, authType, ipFamily, profileIndex uint8, technologyPreference uint16, callType uint8, hasCallType bool) []TLV {
+	var tlvs []TLV
+	if apn != "" {
+		tlvs = append(tlvs, NewTLVString(0x14, apn))
+	}
+	if username != "" {
+		tlvs = append(tlvs, NewTLVString(0x17, username))
+	}
+	if password != "" {
+		tlvs = append(tlvs, NewTLVString(0x18, password))
+	}
+	if authType != 0 {
+		tlvs = append(tlvs, NewTLVUint8(0x16, authType))
+	}
+	tlvs = append(tlvs, NewTLVUint8(0x19, ipFamily))
+	if profileIndex > 0 {
+		tlvs = append(tlvs, NewTLVUint8(0x31, profileIndex))
+	}
+	if technologyPreference > 0 {
+		buf := make([]byte, 2)
+		binary.LittleEndian.PutUint16(buf, technologyPreference)
+		tlvs = append(tlvs, TLV{Type: 0x34, Value: buf})
+	}
+	if hasCallType {
+		tlvs = append(tlvs, NewTLVUint8(0x35, callType))
+	}
+	return tlvs
+}
+
 // ConnectionStatus represents the current connection state / ConnectionStatus代表当前连接状态
 type ConnectionStatus uint8
 
@@ -457,7 +509,16 @@ type RuntimeSettings struct {
 	IPv6Gateway net.IP
 	IPv6DNS1    net.IP
 	IPv6DNS2    net.IP
-	MTU         int
+	IPv6DelegatedPrefix    net.IP
+	IPv6DelegatedPrefixLen int
+	MTU                    int
+	PCSCFUsingPCO    bool
+	HasPCSCFUsingPCO bool
+	PCSCFv4          []net.IP
+	PCSCFv6          []net.IP
+	PCSCFDomains     []string
+	IMCN             bool
+	ResponseTLVs     []TLV
 }
 
 func parsePacketServiceStatusPacket(packet *Packet, checkResult bool) (ConnectionStatus, error) {
@@ -467,7 +528,6 @@ func parsePacketServiceStatusPacket(packet *Packet, checkResult bool) (Connectio
 		}
 	}
 
-	// TLV 0x01: Connection status / TLV 0x01: 连接状态
 	statusTLV := FindTLV(packet.TLVs, 0x01)
 	if statusTLV == nil || len(statusTLV.Value) < 1 {
 		if checkResult {
@@ -479,15 +539,37 @@ func parsePacketServiceStatusPacket(packet *Packet, checkResult bool) (Connectio
 	return ConnectionStatus(statusTLV.Value[0]), nil
 }
 
+func parseIPv6DelegatedPrefixAddress(raw []byte) net.IP {
+	networkOrder := make(net.IP, 16)
+	copy(networkOrder, raw)
+
+	swapped := make(net.IP, 16)
+	for i := 0; i < 16; i += 2 {
+		swapped[i] = raw[i+1]
+		swapped[i+1] = raw[i]
+	}
+
+	if looksLikeDelegatedPrefix(networkOrder) {
+		return networkOrder
+	}
+	if looksLikeDelegatedPrefix(swapped) {
+		return swapped
+	}
+	return networkOrder
+}
+
+func looksLikeDelegatedPrefix(ip net.IP) bool {
+	return ip[0]&0xE0 == 0x20 || ip[0]&0xFE == 0xFC
+}
+
 // GetRuntimeSettings retrieves IP configuration / GetRuntimeSettings检索IP配置
 func (w *WDSService) GetRuntimeSettings(ctx context.Context, ipFamily uint8) (*RuntimeSettings, error) {
-	// Set IP family first / 首先设置IP族
 	if err := w.SetIPFamilyPreference(ctx, ipFamily); err != nil {
 		return nil, err
 	}
 
-	// Request mask: IP, Gateway, DNS, MTU / 请求掩码: IP, 网关, DNS, MTU
-	mask := RuntimeMaskIPAddr | RuntimeMaskGateway | RuntimeMaskDNS | RuntimeMaskMTU
+	mask := RuntimeMaskIPAddr | RuntimeMaskGateway | RuntimeMaskDNS | RuntimeMaskMTU |
+		RuntimeMaskPCSCFPCO | RuntimeMaskPCSCFAddr | RuntimeMaskPCSCFDomain | RuntimeMaskIMCN
 	tlvs := []TLV{NewTLVUint32(0x10, mask)}
 
 	resp, err := w.client.SendRequest(ctx, ServiceWDS, w.clientID, WDSGetRuntimeSettings, tlvs)
@@ -502,9 +584,12 @@ func (w *WDSService) GetRuntimeSettings(ctx context.Context, ipFamily uint8) (*R
 		return nil, fmt.Errorf("get runtime settings failed: %w", err)
 	}
 
-	settings := &RuntimeSettings{}
+	return parseRuntimeSettings(resp), nil
+}
 
-	// Parse IPv4 settings / 解析IPv4设置
+func parseRuntimeSettings(resp *Packet) *RuntimeSettings {
+	settings := &RuntimeSettings{ResponseTLVs: cloneTLVs(resp.TLVs)}
+
 	if tlv := FindTLV(resp.TLVs, TLVWDSIPv4Address); tlv != nil && len(tlv.Value) >= 4 {
 		settings.IPv4Address = net.IPv4(tlv.Value[3], tlv.Value[2], tlv.Value[1], tlv.Value[0])
 	}
@@ -521,7 +606,6 @@ func (w *WDSService) GetRuntimeSettings(ctx context.Context, ipFamily uint8) (*R
 		settings.IPv4DNS2 = net.IPv4(tlv.Value[3], tlv.Value[2], tlv.Value[1], tlv.Value[0])
 	}
 
-	// Parse IPv6 settings / 解析IPv6设置
 	if tlv := FindTLV(resp.TLVs, TLVWDSIPv6Address); tlv != nil && len(tlv.Value) >= 17 {
 		settings.IPv6Address = net.IP(tlv.Value[0:16])
 		settings.IPv6Prefix = int(tlv.Value[16])
@@ -535,13 +619,65 @@ func (w *WDSService) GetRuntimeSettings(ctx context.Context, ipFamily uint8) (*R
 	if tlv := FindTLV(resp.TLVs, TLVWDSSecondaryDNSv6); tlv != nil && len(tlv.Value) >= 16 {
 		settings.IPv6DNS2 = net.IP(tlv.Value[0:16])
 	}
+	if tlv := FindTLV(resp.TLVs, TLVWDSIPv6DelegatedPrefix); tlv != nil && len(tlv.Value) >= 17 {
+		settings.IPv6DelegatedPrefix = parseIPv6DelegatedPrefixAddress(tlv.Value[0:16])
+		settings.IPv6DelegatedPrefixLen = int(tlv.Value[16])
+	}
 
-	// MTU
 	if tlv := FindTLV(resp.TLVs, TLVWDSMtu); tlv != nil && len(tlv.Value) >= 4 {
 		settings.MTU = int(binary.LittleEndian.Uint32(tlv.Value))
 	}
 
-	return settings, nil
+	if tlv := FindTLV(resp.TLVs, TLVWDSPCSCFUsingPCO); tlv != nil && len(tlv.Value) >= 1 {
+		settings.PCSCFUsingPCO = tlv.Value[0] != 0
+		settings.HasPCSCFUsingPCO = true
+	}
+	if tlv := FindTLV(resp.TLVs, TLVWDSPCSCFServerAddrList); tlv != nil && len(tlv.Value) >= 1 {
+		count := int(tlv.Value[0])
+		body := tlv.Value[1:]
+		for i := 0; i < count && (i+1)*4 <= len(body); i++ {
+			v := body[i*4 : i*4+4]
+			settings.PCSCFv4 = append(settings.PCSCFv4, net.IPv4(v[3], v[2], v[1], v[0]))
+		}
+	}
+	if tlv := FindTLV(resp.TLVs, TLVWDSPCSCFServerAddrListV6); tlv != nil && len(tlv.Value) >= 1 {
+		count := int(tlv.Value[0])
+		body := tlv.Value[1:]
+		for i := 0; i < count && (i+1)*16 <= len(body); i++ {
+			settings.PCSCFv6 = append(settings.PCSCFv6, net.IP(append([]byte(nil), body[i*16:(i+1)*16]...)))
+		}
+	}
+	if tlv := FindTLV(resp.TLVs, TLVWDSPCSCFDomainList); tlv != nil && len(tlv.Value) >= 1 {
+		count := int(tlv.Value[0])
+		body := tlv.Value[1:]
+		for i := 0; i < count; i++ {
+			if len(body) < 2 {
+				break
+			}
+			n := int(binary.LittleEndian.Uint16(body[0:2]))
+			if len(body) < 2+n {
+				break
+			}
+			settings.PCSCFDomains = append(settings.PCSCFDomains, string(body[2:2+n]))
+			body = body[2+n:]
+		}
+	}
+	if tlv := FindTLV(resp.TLVs, TLVWDSIMCNFlag); tlv != nil && len(tlv.Value) >= 1 {
+		settings.IMCN = tlv.Value[0] != 0
+	}
+
+	return settings
+}
+
+func cloneTLVs(in []TLV) []TLV {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]TLV, 0, len(in))
+	for _, tlv := range in {
+		out = append(out, TLV{Type: tlv.Type, Value: append([]byte(nil), tlv.Value...)})
+	}
+	return out
 }
 
 // RegisterEventReport registers for WDS indications / RegisterEventReport注册WDS指示
@@ -599,7 +735,7 @@ func (s *WDSService) BindMuxDataPort(ctx context.Context, binding MuxBinding) er
 // GetProfileList retrieves the list of profiles / GetProfileList 获取 Profile 列表
 func (s *WDSService) GetProfileList(ctx context.Context, profileType uint8) ([]ProfileInfo, error) {
 	attempts := [][]TLV{
-		nil,
+		{NewTLVUint8(0x10, profileType)},
 		{NewTLVUint8(0x11, profileType)},
 		{NewTLVUint8(0x01, profileType)},
 	}
@@ -616,81 +752,50 @@ func (s *WDSService) GetProfileList(ctx context.Context, profileType uint8) ([]P
 			continue
 		}
 
-		if tlv := FindTLV(resp.TLVs, 0x01); tlv != nil && len(tlv.Value) >= 1 {
-			count := int(tlv.Value[0])
-			profiles := make([]ProfileInfo, 0, count)
-
-			if len(tlv.Value) >= 1+count*3 {
-				offset := 1
-				for i := 0; i < count; i++ {
-					if offset+3 > len(tlv.Value) {
-						break
-					}
-					pType := tlv.Value[offset]
-					pIndex := tlv.Value[offset+1]
-					profiles = append(profiles, ProfileInfo{Type: pType, Index: pIndex})
-					offset += 3
-				}
-				return profiles, nil
-			}
-
-			if len(tlv.Value) >= 1+count*2 {
-				offset := 1
-				for i := 0; i < count; i++ {
-					if offset+2 > len(tlv.Value) {
-						break
-					}
-					pType := tlv.Value[offset]
-					pIndex := tlv.Value[offset+1]
-					profiles = append(profiles, ProfileInfo{Type: pType, Index: pIndex})
-					offset += 2
-				}
-				return profiles, nil
-			}
-
-			return profiles, nil
-		}
-
-		if tlv := FindTLV(resp.TLVs, 0x10); tlv != nil && len(tlv.Value) >= 1 {
-			count := int(tlv.Value[0])
-			offset := 1
-			profiles := make([]ProfileInfo, 0, count)
-			for i := 0; i < count && offset < len(tlv.Value); i++ {
-				if offset+3 > len(tlv.Value) {
-					break
-				}
-				pType := tlv.Value[offset]
-				pIndex := tlv.Value[offset+1]
-				pNameLen := int(tlv.Value[offset+2])
-				offset += 3
-
-				pName := ""
-				if offset+pNameLen <= len(tlv.Value) {
-					pName = string(tlv.Value[offset : offset+pNameLen])
-					offset += pNameLen
-				} else {
-					// 防止出现半截断数据导致后续遍历全乱，直接截断退出
-					break
-				}
-
-				profiles = append(profiles, ProfileInfo{
-					Type:  pType,
-					Index: pIndex,
-					Name:  pName,
-				})
-			}
-			return profiles, nil
-		}
-
-		return nil, nil
+		return parseProfileList(resp.TLVs), nil
 	}
 	return nil, lastErr
 }
 
-// GetProfileSettings retrieves settings for a specific profile / GetProfileSettings 获取特定 Profile 的设置
-// Note: This returns raw TLVs or a map as profile structure is very complex
-// simplified here to just return "success" if it exists for now, or implement basic APN reading
-func (s *WDSService) GetProfileSettings(ctx context.Context, profileType, profileIndex uint8) (string, error) {
+func parseProfileList(tlvs []TLV) []ProfileInfo {
+	tlv := FindTLV(tlvs, 0x01)
+	if tlv == nil || len(tlv.Value) < 1 {
+		return nil
+	}
+	count := int(tlv.Value[0])
+	offset := 1
+	profiles := make([]ProfileInfo, 0, count)
+	for i := 0; i < count; i++ {
+		if offset+3 > len(tlv.Value) {
+			break
+		}
+		pType := tlv.Value[offset]
+		pIndex := tlv.Value[offset+1]
+		pNameLen := int(tlv.Value[offset+2])
+		offset += 3
+		if offset+pNameLen > len(tlv.Value) {
+			break
+		}
+		pName := string(tlv.Value[offset : offset+pNameLen])
+		offset += pNameLen
+		profiles = append(profiles, ProfileInfo{Type: pType, Index: pIndex, Name: pName})
+	}
+	return profiles
+}
+
+// ProfileSettings holds the subset of a WDS Get Profile Settings (0x002B)
+// response this package parses. IMCNFlag is TLV 0x22 -- the same field the
+// modem uses to mark a profile as IM CN subsystem (IMS) dedicated.
+type ProfileSettings struct {
+	Name        string
+	APN         string
+	PDPType     uint8
+	HasPDPType  bool
+	IMCNFlag    bool
+	HasIMCNFlag bool
+}
+
+func (s *WDSService) GetProfileSettings(ctx context.Context, profileType, profileIndex uint8) (ProfileSettings, error) {
 	bufId := make([]byte, 2)
 	bufId[0] = profileType
 	bufId[1] = profileIndex
@@ -713,13 +818,60 @@ func (s *WDSService) GetProfileSettings(ctx context.Context, profileType, profil
 			continue
 		}
 
-		if tlv := FindTLV(resp.TLVs, 0x14); tlv != nil {
-			return string(tlv.Value), nil
-		}
-
-		return "", nil
+		return parseProfileSettings(resp.TLVs), nil
 	}
-	return "", lastErr
+	return ProfileSettings{}, lastErr
+}
+
+func parseProfileSettings(tlvs []TLV) ProfileSettings {
+	var ps ProfileSettings
+	if tlv := FindTLV(tlvs, 0x10); tlv != nil {
+		ps.Name = string(tlv.Value)
+	}
+	if tlv := FindTLV(tlvs, 0x11); tlv != nil && len(tlv.Value) >= 1 {
+		ps.PDPType = tlv.Value[0]
+		ps.HasPDPType = true
+	}
+	if tlv := FindTLV(tlvs, 0x14); tlv != nil {
+		ps.APN = string(tlv.Value)
+	}
+	if tlv := FindTLV(tlvs, 0x22); tlv != nil && len(tlv.Value) >= 1 {
+		ps.IMCNFlag = tlv.Value[0] != 0
+		ps.HasIMCNFlag = true
+	}
+	return ps
+}
+
+func (s *WDSService) DiscoverIMSProfileIndex(ctx context.Context, profileType uint8, apnHint string) (index uint8, found bool, err error) {
+	profiles, err := s.GetProfileList(ctx, profileType)
+	if err != nil {
+		return 0, false, err
+	}
+	index, found = pickIMSProfileIndex(profiles, func(p ProfileInfo) (ProfileSettings, error) {
+		return s.GetProfileSettings(ctx, p.Type, p.Index)
+	}, apnHint)
+	return index, found, nil
+}
+
+func pickIMSProfileIndex(profiles []ProfileInfo, settingsFor func(ProfileInfo) (ProfileSettings, error), apnHint string) (index uint8, found bool) {
+	apnHint = strings.TrimSpace(apnHint)
+	apnMatch, hasAPNMatch := uint8(0), false
+	for _, p := range profiles {
+		ps, err := settingsFor(p)
+		if err != nil {
+			continue
+		}
+		if ps.HasIMCNFlag && ps.IMCNFlag {
+			return p.Index, true
+		}
+		if !hasAPNMatch && apnHint != "" && strings.EqualFold(strings.TrimSpace(ps.APN), apnHint) {
+			apnMatch, hasAPNMatch = p.Index, true
+		}
+	}
+	if hasAPNMatch {
+		return apnMatch, true
+	}
+	return 0, false
 }
 
 // GetChannelRates returns the current and maximum channel rates.

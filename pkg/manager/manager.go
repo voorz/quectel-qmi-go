@@ -83,6 +83,7 @@ type Config struct {
 	NoDial       bool  // Only open QMI services, don't perform WDS dialing / 仅打开 QMI 服务, 不进行 WDS 拨号
 
 	DataPlanePolicy DataPlanePolicy // Data-plane service allocation policy / 数据面服务分配策略
+	DataPlane       DataPlaneSpec   // Declared topology intent / 声明的拓扑意图
 	Timeouts        TimeoutConfig
 	RetryPolicy     RetryPolicy
 	HealthPolicy    HealthPolicy
@@ -199,7 +200,8 @@ type Manager struct {
 	regNotify chan bool // For fast registration detection / 用于快速注册检测
 
 	// 多路拨号 (QMAP) / Multi-PDN
-	muxIface string // QMAP 绑定后的虚拟网卡名 (如 qmimux0)
+	masterIface string // 物理网卡名 (QMAP master)
+	muxIface   string // QMAP 绑定后的虚拟网卡名 (如 qmimux0)
 
 	timerMu                 sync.Mutex
 	scheduledTimers         map[*time.Timer]struct{}
@@ -224,6 +226,12 @@ type Manager struct {
 	wmsReplayInProgress     bool
 	serviceTimeoutMu        sync.Mutex
 	serviceTimeoutFailures  map[serviceTimeoutKey]serviceTimeoutWindow
+
+	// Data-plane topology / 数据面拓扑
+	dataPlane                   dataPlaneController
+	dataPlaneOps                dataPlaneOps
+	pdnOps                      pdnOps
+	connectedDataPlaneGeneration uint64
 
 	// SMS recovery state / 短信恢复状态
 	lastKnownGoodRoutes        *qmi.WMSRouteConfig
@@ -4593,4 +4601,83 @@ func isLikelyShortCode(phone string) bool {
 	}
 	digits := strings.TrimLeft(phone, "0123456789")
 	return digits == "" && len(phone) <= 6
+}
+
+// ============================================================================
+// Data-plane topology support (data_plane.go / pdn_session.go dependencies)
+// ============================================================================
+
+func dataFormatTargetForMux(muxID uint8) qmi.DataFormat {
+	target := qmi.DataFormat{
+		LinkProtocol:      qmi.LinkProtocolIP,
+		UlDataAggregation: uint32(qmi.DataFormatUlDataAggDisabled),
+		DlDataAggregation: uint32(qmi.DataFormatDlDataAggDisabled),
+	}
+	if muxID > 0 {
+		target.UlDataAggregation = qmi.DataAggregationQMAP
+		target.DlDataAggregation = qmi.DataAggregationQMAP
+	}
+	return target
+}
+
+func (m *Manager) ensureModemDataFormat(ctx context.Context, target qmi.DataFormat) error {
+	if m.wda == nil {
+		return fmt.Errorf("WDA service not available")
+	}
+	setCtx, cancel := contextWithMaxTimeout(ctx, m.cfg.Timeouts.StatusCheck)
+	defer cancel()
+	return m.wda.SetDataFormat(setCtx, target)
+}
+
+func (m *Manager) ensureDataPlaneServicesLocked(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if m.dataPlaneDisabled() {
+		return ErrServiceNotReady("data-plane")
+	}
+
+	var err error
+	if m.cfg.EnableIPv4 && m.wds == nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		m.log.Debug("Allocating WDS client for IPv4...")
+		m.wds, err = m.createWDSService(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to allocate WDS client: %w", err)
+		}
+	}
+
+	if m.cfg.EnableIPv6 && m.wdsV6 == nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		m.log.Debug("Allocating WDS client for IPv6...")
+		m.wdsV6, err = m.createWDSService(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to allocate IPv6 WDS client: %w", err)
+		}
+	}
+
+	if m.shouldAllocateWDA() && m.wda == nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		m.log.Debug("Allocating WDA client...")
+		m.wda, err = m.createWDAService(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to allocate WDA client: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// defaultDataPlaneTarget returns the published topology snapshot and physical
+// master interface name.
+func (m *Manager) defaultDataPlaneTarget() (DataPlaneSnapshot, string) {
+	m.dataPlane.mu.Lock()
+	defer m.dataPlane.mu.Unlock()
+	return m.dataPlane.snapshot, m.dataPlane.masterInterface
 }

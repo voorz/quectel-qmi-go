@@ -95,8 +95,10 @@ const (
 	NASConfigSignalInfoV2        uint16 = 0x006C // QMINAS_CONFIG_SIGNAL_INFO_V2_REQ
 	NASNetworkRejectInd          uint16 = 0x0068 // QMINAS_NETWORK_REJECT_IND
 	NASGetNetworkTime            uint16 = 0x007D // QMINAS_GET_NETWORK_TIME_REQ
-	NASIncrementalNetworkScan    uint16 = 0x0085 // QMINAS_INCREMENTAL_NETWORK_SCAN_REQ
+ NASIncrementalNetworkScan    uint16 = 0x0085 // QMINAS_INCREMENTAL_NETWORK_SCAN_REQ
 	NASIncrementalNetworkScanInd uint16 = 0x0085 // QMINAS_INCREMENTAL_NETWORK_SCAN_IND
+	NASGetTxRxInfo               uint16 = 0x005A // QMINAS_GET_TX_RX_INFO_REQ
+	NASGetLTECphyCAInfo          uint16 = 0x00AC // QMINAS_GET_LTE_CPHY_CA_INFO_REQ
 )
 
 // ============================================================================
@@ -137,6 +139,7 @@ const (
 	CTLRevokeClientIDInd uint16 = 0x0024 // QMICTL_REVOKE_CLIENT_ID_IND
 	CTLInternalProxyOpen uint16 = 0xFF00 // libqmi qmi-proxy internal open request
 	TLVProxyDevicePath   uint8  = 0x01   // CTLInternalProxyOpen device path TLV
+	CTLSync              uint16 = 0x0027 // QMICTL_SYNC_REQ
 )
 
 // ============================================================================
@@ -156,6 +159,127 @@ const (
 	IpFamilyV4 uint8 = 0x04
 	IpFamilyV6 uint8 = 0x06
 )
+
+// ============================================================================
+// QRTR Virtual Header (7 bytes) / QRTR 虚拟包头 (7字节)
+//
+// Not a real wire format: this package's own synthetic envelope for
+// services whose ID exceeds the 8-bit QMUX ServiceType range. It is only
+// ever produced/consumed internally, exchanged between Client and its own
+// local QRTR CTL simulation (qrtrTransport) -- never sent to a real modem.
+//
+// Offset 0: IFType (always 0x02) / 偏移0: 接口类型 (恒为 0x02)
+// Offset 1-2: Length (little-endian, total length after IFType) / 偏移1-2: 长度
+// Offset 3: ControlFlags / 偏移3: 控制标志
+// Offset 4-5: ServiceType (little-endian, 16-bit) / 偏移4-5: 服务类型 (小端序, 16位)
+// Offset 6: ClientID / 偏移6: 客户端ID
+type QrtrVirtualHeader struct {
+	IFType       uint8
+	Length       uint16
+	ControlFlags uint8
+	ServiceType  uint16
+	ClientID     uint8
+}
+
+const QrtrHeaderSize = 7
+
+func (h *QrtrVirtualHeader) Marshal() []byte {
+	buf := make([]byte, QrtrHeaderSize)
+	buf[0] = 0x02
+	binary.LittleEndian.PutUint16(buf[1:3], h.Length)
+	buf[3] = h.ControlFlags
+	binary.LittleEndian.PutUint16(buf[4:6], h.ServiceType)
+	buf[6] = h.ClientID
+	return buf
+}
+
+func UnmarshalQrtrVirtualHeader(data []byte) (*QrtrVirtualHeader, error) {
+	if len(data) < QrtrHeaderSize {
+		return nil, fmt.Errorf("data too short for QRTR virtual header: %d", len(data))
+	}
+	if data[0] != 0x02 {
+		return nil, fmt.Errorf("invalid IFType: 0x%02x", data[0])
+	}
+	return &QrtrVirtualHeader{
+		IFType:       data[0],
+		Length:       binary.LittleEndian.Uint16(data[1:3]),
+		ControlFlags: data[3],
+		ServiceType:  binary.LittleEndian.Uint16(data[4:6]),
+		ClientID:     data[6],
+	}, nil
+}
+
+// marshalFrameHeader builds the outer frame header (QMUX 0x01 or QRTR
+// virtual 0x02) for a body of bodyLen bytes, automatically picking the
+// narrower/real QMUX header whenever service fits in 8 bits -- which is
+// always true for real QMUX/qmi-proxy traffic, so those paths are
+// byte-for-byte unchanged.
+func marshalFrameHeader(service uint16, clientID uint8, bodyLen int) []byte {
+	if service <= 0xFF {
+		h := QmuxHeader{
+			IFType:       0x01,
+			Length:       uint16(bodyLen + 5), // +5 for Length, CtlFlags, ServiceType, ClientID
+			ControlFlags: 0x00,
+			ServiceType:  uint8(service),
+			ClientID:     clientID,
+		}
+		return h.Marshal()
+	}
+	h := QrtrVirtualHeader{
+		IFType:       0x02,
+		Length:       uint16(bodyLen + 6), // +6 for Length, CtlFlags, ServiceType(2), ClientID
+		ControlFlags: 0x00,
+		ServiceType:  service,
+		ClientID:     clientID,
+	}
+	return h.Marshal()
+}
+
+// decodedFrameHeader is the header-size-agnostic result of parsing either a
+// QMUX or QRTR-virtual frame header.
+type decodedFrameHeader struct {
+	headerSize   int
+	length       uint16
+	controlFlags uint8
+	serviceType  uint16
+	clientID     uint8
+}
+
+// unmarshalFrameHeader dispatches on the first marker byte (0x01 QMUX vs
+// 0x02 QRTR virtual) and returns a unified, header-size-agnostic view.
+func unmarshalFrameHeader(data []byte) (decodedFrameHeader, error) {
+	if len(data) < 1 {
+		return decodedFrameHeader{}, fmt.Errorf("data too short for frame header")
+	}
+	switch data[0] {
+	case 0x01:
+		h, err := UnmarshalQmuxHeader(data)
+		if err != nil {
+			return decodedFrameHeader{}, err
+		}
+		return decodedFrameHeader{
+			headerSize:   QmuxHeaderSize,
+			length:       h.Length,
+			controlFlags: h.ControlFlags,
+			serviceType:  uint16(h.ServiceType),
+			clientID:     h.ClientID,
+		}, nil
+	case 0x02:
+		h, err := UnmarshalQrtrVirtualHeader(data)
+		if err != nil {
+			return decodedFrameHeader{}, err
+		}
+		return decodedFrameHeader{
+			headerSize:   QrtrHeaderSize,
+			length:       h.Length,
+			controlFlags: h.ControlFlags,
+			serviceType:  h.ServiceType,
+			clientID:     h.ClientID,
+		}, nil
+	default:
+		return decodedFrameHeader{}, fmt.Errorf("invalid frame marker: 0x%02x", data[0])
+	}
+}
 
 // ============================================================================
 // QMUX Header Structure (matches C struct exactly) / QMUX头结构 (与C结构完全匹配)
@@ -402,30 +526,22 @@ func (p *Packet) Marshal() []byte {
 		body = append(svcH.Marshal(), tlvBytes...)
 	}
 
-	// QMUX header
-	// Length = LengthField(2) + CtlFlags(1) + QMIType(1) + ClientId(1) + SDU
-	// This matches the C version where QMIHdr.Length = (TotalPacketSize - 1) / 这与C版本匹配，其中QMIHdr.Length = (总包大小 - 1)
-	qmuxH := QmuxHeader{
-		IFType:       0x01,
-		Length:       uint16(len(body) + 5), // +5 for Length, CtlFlags, ServiceType, ClientID
-		ControlFlags: 0x00,
-		ServiceType:  p.ServiceType,
-		ClientID:     p.ClientID,
-	}
-
-	return append(qmuxH.Marshal(), body...)
+	// Outer frame header: real 6-byte QMUX (0x01) if ServiceType fits in 8
+	// bits (always true for real QMUX/qmi-proxy traffic), otherwise the
+	// synthetic 7-byte QRTR virtual header (0x02). See marshalFrameHeader.
+	return append(marshalFrameHeader(uint16(p.ServiceType), p.ClientID, len(body)), body...)
 }
 
 // UnmarshalPacket parses a complete QMI packet from bytes / 从字节解析完整的QMI数据包
 func UnmarshalPacket(data []byte) (*Packet, error) {
-	qmuxH, err := UnmarshalQmuxHeader(data)
+	fh, err := unmarshalFrameHeader(data)
 	if err != nil {
 		return nil, err
 	}
 
-	expectedTotal := int(qmuxH.Length) + 1
-	if expectedTotal < QmuxHeaderSize {
-		return nil, fmt.Errorf("invalid QMUX length: %d", qmuxH.Length)
+	expectedTotal := int(fh.length) + 1
+	if expectedTotal < fh.headerSize {
+		return nil, fmt.Errorf("invalid frame length: %d", fh.length)
 	}
 	if len(data) < expectedTotal {
 		return nil, fmt.Errorf("packet truncated: need %d, have %d", expectedTotal, len(data))
@@ -435,13 +551,13 @@ func UnmarshalPacket(data []byte) (*Packet, error) {
 	}
 
 	p := &Packet{
-		ServiceType: qmuxH.ServiceType,
-		ClientID:    qmuxH.ClientID,
+		ServiceType: uint8(fh.serviceType),
+		ClientID:    fh.clientID,
 	}
 
-	body := data[QmuxHeaderSize:]
+	body := data[fh.headerSize:]
 
-	if qmuxH.ServiceType == ServiceControl {
+	if fh.serviceType == uint16(ServiceControl) {
 		if len(body) < CTLHeaderSize {
 			return nil, fmt.Errorf("body too short for CTL header")
 		}
@@ -545,4 +661,56 @@ func NewTLVUint32(t uint8, v uint32) TLV {
 
 func NewTLVString(t uint8, s string) TLV {
 	return TLV{Type: t, Value: []byte(s)}
+}
+
+// ============================================================================
+// CTL service-identifier TLV (0x01) encode/decode
+//
+// The real QMI CTL service's CTL_GET_CLIENT_ID / CTL_RELEASE_CLIENT_ID /
+// CTL_REVOKE_CLIENT_ID_IND messages all carry a TLV 0x01 whose service field
+// is genuinely, permanently 1 byte wide -- a real modem (QMUX or QRTR alike)
+// never understands anything else. Only requests/responses that our own
+// local QRTR CTL simulation (qrtrTransport) synthesizes for a QRTR-only
+// service > 0xFF use the 2-byte variant.
+
+// encodeCTLServiceOnlyTLV builds TLV 0x01 for CTL_GET_CLIENT_ID_REQ.
+func encodeCTLServiceOnlyTLV(service uint16) TLV {
+	if service <= 0xFF {
+		return TLV{Type: 0x01, Value: []byte{byte(service)}}
+	}
+	return TLV{Type: 0x01, Value: []byte{byte(service), byte(service >> 8)}}
+}
+
+// decodeCTLServiceOnlyTLV parses TLV 0x01 from CTL_GET_CLIENT_ID_REQ.
+func decodeCTLServiceOnlyTLV(v []byte) (service uint16, ok bool) {
+	switch len(v) {
+	case 1:
+		return uint16(v[0]), true
+	case 2:
+		return binary.LittleEndian.Uint16(v), true
+	default:
+		return 0, false
+	}
+}
+
+// encodeCTLServiceClientIDTLV builds TLV 0x01 for CTL_GET_CLIENT_ID_RESP /
+// CTL_RELEASE_CLIENT_ID_REQ / CTL_REVOKE_CLIENT_ID_IND.
+func encodeCTLServiceClientIDTLV(service uint16, clientID uint8) TLV {
+	if service <= 0xFF {
+		return TLV{Type: 0x01, Value: []byte{byte(service), clientID}}
+	}
+	return TLV{Type: 0x01, Value: []byte{byte(service), byte(service >> 8), clientID}}
+}
+
+// decodeCTLServiceClientIDTLV parses TLV 0x01 from CTL_GET_CLIENT_ID_RESP /
+// CTL_RELEASE_CLIENT_ID_REQ / CTL_REVOKE_CLIENT_ID_IND.
+func decodeCTLServiceClientIDTLV(v []byte) (service uint16, clientID uint8, ok bool) {
+	switch len(v) {
+	case 2:
+		return uint16(v[0]), v[1], true
+	case 3:
+		return binary.LittleEndian.Uint16(v[0:2]), v[2], true
+	default:
+		return 0, 0, false
+	}
 }

@@ -30,6 +30,13 @@ const (
 	DataFormatNdpSigEnabled     uint8 = 1 << 4 // New Data Path Signature / 新数据路径签名
 )
 
+// DataAggregationQMAP is QMI_WDA_DATA_AGGREGATION_PROTOCOL_QMAP. This is a
+// distinct enumeration from the DataFormatUlDataAgg{Enabled,Disabled} bit
+// flags above (those gate a different TLV bit entirely); this value goes
+// directly into DataFormat.UlDataAggregation / DlDataAggregation when a
+// connection is muxed.
+const DataAggregationQMAP uint32 = 0x05
+
 // WDAService implements the QMI WDA service / WDAService 实现 QMI WDA 服务
 type WDAService struct {
 	client   *Client
@@ -62,8 +69,21 @@ type DataFormat struct {
 	LinkProtocol      uint32
 	UlDataAggregation uint32
 	DlDataAggregation uint32
+
+	// EndpointType and InterfaceNumber are optional and together populate the
+	// Set Data Format INPUT-only "Endpoint Info" TLV (0x17): EndpointType is
+	// a QmiDataEndpointType (HSIC=1, HSUSB=2, PCIe=3, embedded=4) and
+	// InterfaceNumber is the interface number on that endpoint. Get Data
+	// Format never reports endpoint info back (see DataFormatDetails), so
+	// there is no way to discover these values for a caller that doesn't
+	// already know its own endpoint. Leave both zero to omit the TLV
+	// entirely -- SetDataFormat treats EndpointType == 0 as "not supplied".
+	EndpointType    uint32
+	InterfaceNumber uint32
 }
 
+// DataFormatDetails is the parsed result of a WDA Get Data Format request. /
+// DataFormatDetails 是 WDA Get Data Format 请求的解析结果。
 type DataFormatDetails struct {
 	QOSSetting uint8
 
@@ -74,8 +94,23 @@ type DataFormatDetails struct {
 	DlMaxDatagrams uint32
 	DlMaxSize      uint32
 
-	EndpointType uint32
-	EndpointID   uint32
+	// UlMaxDatagrams and UlMaxSize come from Get Data Format OUTPUT TLVs
+	// 0x17 and 0x18 ("Uplink Data Aggregation Max Datagrams" / "Uplink Data
+	// Aggregation Max Size" per libqmi's data/qmi-service-wda.json). Get
+	// Data Format's response carries NO endpoint information whatsoever.
+	//
+	// TRAP -- read this before touching 0x17/0x18 anywhere in this file:
+	// Set Data Format and Get Data Format number TLV 0x17 (and, as a
+	// consequence, 0x18) completely differently.
+	//   - Set Data Format INPUT 0x17 is "Endpoint Info" (a sequence of
+	//     Endpoint Type + Interface Number guint32s); ITS uplink aggregation
+	//     max datagrams/size TLVs instead live at 0x1B/0x1C.
+	//   - Get Data Format OUTPUT 0x17/0x18 are the uplink aggregation max
+	//     datagrams/size counters below, and Get Data Format has no
+	//     Endpoint Info TLV at all -- a device's endpoint type/interface
+	//     number cannot be discovered by asking the modem.
+	UlMaxDatagrams uint32
+	UlMaxSize      uint32
 }
 
 // QMAPSettings configures QMAP (Qualcomm Mobile Access Point) parameters / QMAPSettings 配置 QMAP 参数
@@ -90,17 +125,11 @@ type LoopbackConfig struct {
 }
 
 // SetDataFormat sets the data format (e.g. Raw IP) / SetDataFormat设置数据格式 (例如 原始IP)
+//
+// Endpoint Info (TLV 0x17 on this message's INPUT) is only sent when the
+// caller supplies a non-zero format.EndpointType. Omitting the TLV is
+// optional and strictly safer than sending values that were never valid.
 func (s *WDAService) SetDataFormat(ctx context.Context, format DataFormat) error {
-	var endpointTLV *TLV
-	if current, err := s.GetDataFormatDetails(ctx); err == nil {
-		if current.EndpointType != 0 && current.EndpointID != 0 {
-			buf := make([]byte, 8)
-			binary.LittleEndian.PutUint32(buf[0:4], current.EndpointType)
-			binary.LittleEndian.PutUint32(buf[4:8], current.EndpointID)
-			endpointTLV = &TLV{Type: 0x17, Value: buf}
-		}
-	}
-
 	bufLink := make([]byte, 4)
 	binary.LittleEndian.PutUint32(bufLink, format.LinkProtocol)
 
@@ -110,37 +139,32 @@ func (s *WDAService) SetDataFormat(ctx context.Context, format DataFormat) error
 	bufDl := make([]byte, 4)
 	binary.LittleEndian.PutUint32(bufDl, format.DlDataAggregation)
 
-	baseTLVs := []TLV{
+	tlvs := []TLV{
 		{Type: 0x10, Value: []byte{0x00}},
 		{Type: 0x11, Value: bufLink},
 		{Type: 0x12, Value: bufUl},
 		{Type: 0x13, Value: bufDl},
 	}
 
-	attempts := [][]TLV{
-		baseTLVs,
-	}
-	if endpointTLV != nil {
-		attempts = append([][]TLV{append(append([]TLV{}, baseTLVs...), *endpointTLV)}, attempts...)
+	if format.EndpointType != 0 {
+		buf := make([]byte, 8)
+		binary.LittleEndian.PutUint32(buf[0:4], format.EndpointType)
+		binary.LittleEndian.PutUint32(buf[4:8], format.InterfaceNumber)
+		tlvs = append(tlvs, TLV{Type: 0x17, Value: buf})
 	}
 
-	var lastErr error
-	for _, tlvs := range attempts {
-		resp, err := s.client.SendRequest(ctx, ServiceWDA, s.clientID, WDASetDataFormat, tlvs)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if err := resp.CheckResult(); err != nil {
-			lastErr = err
-			continue
-		}
-		return nil
+	resp, err := s.client.SendRequest(ctx, ServiceWDA, s.clientID, WDASetDataFormat, tlvs)
+	if err != nil {
+		return err
 	}
-	return lastErr
+	return resp.CheckResult()
 }
 
 // GetDataFormat gets the current data format configuration / GetDataFormat 获取当前的数据格式配置
+//
+// The returned DataFormat's EndpointType/InterfaceNumber are always zero:
+// Get Data Format's response never carries endpoint info (see
+// DataFormatDetails), so there is nothing here to propagate into them.
 func (s *WDAService) GetDataFormat(ctx context.Context) (*DataFormat, error) {
 	d, err := s.GetDataFormatDetails(ctx)
 	if err != nil {
@@ -163,6 +187,13 @@ func (s *WDAService) GetDataFormatDetails(ctx context.Context) (*DataFormatDetai
 		return nil, err
 	}
 
+	return parseDataFormatDetails(resp), nil
+}
+
+// parseDataFormatDetails parses the WDA Get Data Format response TLVs into a
+// DataFormatDetails value. It performs pure TLV parsing only; result-code
+// checking and request construction stay in GetDataFormatDetails.
+func parseDataFormatDetails(resp *Packet) *DataFormatDetails {
 	format := &DataFormatDetails{}
 
 	if tlv := FindTLV(resp.TLVs, 0x10); tlv != nil && len(tlv.Value) >= 1 {
@@ -183,14 +214,16 @@ func (s *WDAService) GetDataFormatDetails(ctx context.Context) (*DataFormatDetai
 	if tlv := FindTLV(resp.TLVs, 0x16); tlv != nil && len(tlv.Value) >= 4 {
 		format.DlMaxSize = binary.LittleEndian.Uint32(tlv.Value)
 	}
+	// 0x17/0x18 here are Get Data Format's OUTPUT numbering (Uplink Data
+	// Aggregation Max Datagrams/Size) -- NOT Endpoint Info.
 	if tlv := FindTLV(resp.TLVs, 0x17); tlv != nil && len(tlv.Value) >= 4 {
-		format.EndpointType = binary.LittleEndian.Uint32(tlv.Value)
+		format.UlMaxDatagrams = binary.LittleEndian.Uint32(tlv.Value)
 	}
 	if tlv := FindTLV(resp.TLVs, 0x18); tlv != nil && len(tlv.Value) >= 4 {
-		format.EndpointID = binary.LittleEndian.Uint32(tlv.Value)
+		format.UlMaxSize = binary.LittleEndian.Uint32(tlv.Value)
 	}
 
-	return format, nil
+	return format
 }
 
 // SetQMAPSettings configures QMAP settings / SetQMAPSettings 配置 QMAP 设置
@@ -261,11 +294,12 @@ func (s *WDAService) SetLoopbackConfig(ctx context.Context, config LoopbackConfi
 
 // DataFormatMode constants for Link Protocol (TLV 0x11) / Link Protocol (TLV 0x11) 的 DataFormatMode 常量
 const (
-	LinkProtocolEthernet uint32 = 0x01 // Sometime 0x02? Need to verify spec vs modem. / 有时是0x02? 需要针对modem验证规范。
-	LinkProtocolIP       uint32 = 0x02
+	LinkProtocolEthernet uint32 = 0x01 // QMI_WDA_LINK_LAYER_PROTOCOL_802_3 (Ethernet)
+	LinkProtocolIP       uint32 = 0x02 // QMI_WDA_LINK_LAYER_PROTOCOL_RAW_IP (IP)
 )
 
-// Actually, looking at QCQMUX.h isn't super clear on values. / 实际上，查看QCQMUX.h关于值的说明并不是很清楚。
-// Standard QMI: / 标准QMI:
-// 0x01: QMI_WDA_LINK_LAYER_PROTOCOL_802_3 (Ethernet) / 0x01: QMI_WDA_LINK_LAYER_PROTOCOL_802_3 (以太网)
-// 0x02: QMI_WDA_LINK_LAYER_PROTOCOL_RAW_IP (IP) / 0x02: QMI_WDA_LINK_LAYER_PROTOCOL_RAW_IP (IP)
+// DataAggregationProtocolQMAP is QMI_WDA_DATA_AGGREGATION_PROTOCOL_QMAP from
+// libqmi (src/libqmi-glib/qmi-enums-wda.h), the value UlDataAggregation /
+// DlDataAggregation (Set/Get Data Format TLVs 0x12 / 0x13) must carry for
+// QMAP multiplexing to work.
+const DataAggregationProtocolQMAP uint32 = 0x05

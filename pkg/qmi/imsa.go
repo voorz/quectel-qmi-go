@@ -16,7 +16,11 @@ type IMSAService struct {
 }
 
 func NewIMSAService(client *Client) (*IMSAService, error) {
-	clientID, err := client.AllocateClientID(ServiceIMSA)
+	return NewIMSAServiceWithContext(context.Background(), client)
+}
+
+func NewIMSAServiceWithContext(ctx context.Context, client *Client) (*IMSAService, error) {
+	clientID, err := client.AllocateClientIDWithContext(ctx, ServiceIMSA)
 	if err != nil {
 		return nil, err
 	}
