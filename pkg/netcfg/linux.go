@@ -380,3 +380,38 @@ func parseMuxIDAttr(s string) (uint8, error) {
 	}
 	return uint8(v), nil
 }
+
+// ReconcileResidualMux deletes every QMAP mux under masterIface whose mux_id
+// is not in keepMuxIDs. Call this once, early in device bootstrap, before
+// any add_mux for this session.
+func (l *LinuxConfigurator) ReconcileResidualMux(masterIface string, keepMuxIDs []uint8) ([]uint8, error) {
+	keep := make(map[uint8]bool, len(keepMuxIDs))
+	for _, id := range keepMuxIDs {
+		keep[id] = true
+	}
+
+	entries, err := os.ReadDir(sysClassNetRoot)
+	if err != nil {
+		return nil, fmt.Errorf("netcfg: 扫描 %s 失败: %w", sysClassNetRoot, err)
+	}
+
+	var deleted []uint8
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "qmimux") {
+			continue
+		}
+		if !muxBelongsToMaster(sysClassNetRoot, name, masterIface) {
+			continue
+		}
+		muxID, ok := readQMAPMuxID(sysClassNetRoot, name)
+		if !ok || keep[muxID] {
+			continue
+		}
+		if err := l.DelQMAPMux(masterIface, muxID); err != nil {
+			return deleted, fmt.Errorf("netcfg: 清理残留 mux_id=%d 失败: %w", muxID, err)
+		}
+		deleted = append(deleted, muxID)
+	}
+	return deleted, nil
+}

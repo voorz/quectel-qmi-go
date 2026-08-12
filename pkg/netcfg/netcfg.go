@@ -101,3 +101,8 @@ func GetQMAPMuxIface(masterIface string, muxID uint8) string {
 func EnableRawIP(ifname string) error {
 	return GetConfigurator().EnableRawIP(ifname)
 }
+
+// ReconcileResidualMux 清理 masterIface 下的残留 QMAP mux
+func ReconcileResidualMux(masterIface string, keepMuxIDs []uint8) ([]uint8, error) {
+	return GetConfigurator().ReconcileResidualMux(masterIface, keepMuxIDs)
+}

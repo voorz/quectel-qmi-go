@@ -231,6 +231,7 @@ type Manager struct {
 	dataPlane                   dataPlaneController
 	dataPlaneOps                dataPlaneOps
 	pdnOps                      pdnOps
+	netcfgOps                   netcfgOps
 	connectedDataPlaneGeneration uint64
 
 	// SMS recovery state / 短信恢复状态
@@ -2680,6 +2681,13 @@ func (m *Manager) cleanup() {
 	m.stopScheduledTimers()
 	cleanupCtx, cancel := m.opContext(m.cfg.Timeouts.Stop)
 	defer cancel()
+	// Secondary PDNs own independent WDS clients and muxes, but share this
+	// manager's transport. Release them before clearing the shared services.
+	m.closeManagedPDNSessions(cleanupCtx)
+	m.dataPlane.mu.Lock()
+	m.dataPlane.snapshot = DataPlaneSnapshot{}
+	m.dataPlane.masterInterface = ""
+	m.dataPlane.mu.Unlock()
 
 	m.mu.Lock()
 	wds := m.wds
@@ -2699,8 +2707,10 @@ func (m *Manager) cleanup() {
 	ifname := m.cfg.Device.NetInterface
 
 	muxIface := m.muxIface
-	muxID := m.cfg.MuxID
-	masterIface := m.cfg.Device.NetInterface
+	masterIface := m.masterIface
+	if masterIface == "" {
+		masterIface = m.cfg.Device.NetInterface
+	}
 
 	m.wds = nil
 	m.wdsV6 = nil
@@ -2718,6 +2728,7 @@ func (m *Manager) cleanup() {
 	m.handleV6 = 0
 	m.settings = nil
 	m.muxIface = ""
+	m.masterIface = ""
 	m.markControlNotReadyLocked("cleanup")
 	m.markCoreNotReadyLocked("cleanup", nil)
 	m.wmsTransportStatus = 0
@@ -2741,15 +2752,22 @@ func (m *Manager) cleanup() {
 
 	cleanupTasks := make([]cleanupTask, 0, 4)
 
-	if muxIface != "" && muxID > 0 {
+	if muxIface != "" || masterIface != "" {
 		cleanupTasks = append(cleanupTasks, cleanupTask{
 			name: "qmap",
 			run: func(context.Context) error {
-				return errors.Join(
-					netcfg.FlushAddresses(muxIface),
-					netcfg.BringDown(muxIface),
-					netcfg.DelQMAPMux(masterIface, muxID),
-				)
+				var err error
+				if muxIface != "" {
+					err = errors.Join(
+						netcfg.FlushAddresses(muxIface),
+						netcfg.BringDown(muxIface),
+					)
+				}
+				if masterIface != "" {
+					_, reconcileErr := netcfg.ReconcileResidualMux(masterIface, nil)
+					err = errors.Join(err, reconcileErr)
+				}
+				return err
 			},
 		})
 	}
@@ -3317,7 +3335,7 @@ func (m *Manager) doConnect() error {
 	dialCtx, cancelDial := m.opContext(m.cfg.Timeouts.Dial)
 	defer cancelDial()
 
-	if err := m.ensureDataPlaneServices(dialCtx); err != nil {
+	if err := m.EnsureDataPlaneTopology(dialCtx); err != nil {
 		m.handleDialFailure(err)
 		return err
 	}
@@ -3329,43 +3347,25 @@ func (m *Manager) doConnect() error {
 		return err
 	}
 
-	// ========== 多路拨号 (QMAP) 准备 ==========
-	if m.cfg.MuxID > 0 {
-		masterIface := m.cfg.Device.NetInterface
-		m.log.Infof("多路拨号模式: MuxID=%d, ProfileIndex=%d, 物理网卡=%s",
-			m.cfg.MuxID, m.cfg.ProfileIndex, masterIface)
-
-		// 1. 确保 Raw IP 模式已开启
-		if err := netcfg.EnableRawIP(masterIface); err != nil {
-			m.log.WithError(err).Warn("开启 Raw IP 模式失败")
-		}
-
-		// 2. 创建 QMAP 虚拟网卡 (如果不存在)
-		muxIfname, err := netcfg.AddQMAPMux(masterIface, m.cfg.MuxID)
+	// ========== 多路拨号 (QMAP) 绑定 ==========
+	topology, masterIface := m.defaultDataPlaneTarget()
+	if topology.Mode == DataPlaneModeQMAP && topology.DefaultMuxID > 0 {
+		binding, err := m.defaultMuxBinding()
 		if err != nil {
-			m.log.WithError(err).Errorf("创建 MUX ID=%d 虚拟网卡失败", m.cfg.MuxID)
-			// 继续尝试，也许用户已手动创建
-		} else {
-			m.log.Infof("QMAP 虚拟网卡: %s (MuxID=%d)", muxIfname, m.cfg.MuxID)
-			m.mu.Lock()
-			m.muxIface = muxIfname
-			m.mu.Unlock()
+			m.log.WithError(err).Error("默认数据连接无法确定 QMAP 绑定端点，放弃本次拨号")
+			m.handleDialFailure(err)
+			return err
 		}
+		m.log.Infof("多路拨号模式: MuxID=%d, ProfileIndex=%d, 物理网卡=%s, 端点=%d",
+			binding.MuxID, m.cfg.ProfileIndex, masterIface, binding.EpIfID)
 
-		// 3. 绑定 WDS Client 到 Mux Data Port
-		binding := qmi.MuxBinding{
-			EpType:     0x02, // HSUSB
-			EpIfID:     0x04, // 默认 Interface ID
-			MuxID:      m.cfg.MuxID,
-			ClientType: 1, // Tethered
-		}
 		if m.wds != nil {
 			ctx, cancel := m.opContext(m.cfg.Timeouts.Dial)
 			if err := m.wds.BindMuxDataPort(ctx, binding); err != nil {
 				m.log.WithError(err).Error("WDS IPv4 BindMuxDataPort 失败")
 				// 非致命，继续
 			} else {
-				m.log.Infof("WDS IPv4 已绑定 MuxID=%d", m.cfg.MuxID)
+				m.log.Infof("WDS IPv4 已绑定 MuxID=%d", binding.MuxID)
 			}
 			cancel()
 		}
@@ -3376,7 +3376,7 @@ func (m *Manager) doConnect() error {
 			if err := m.wdsV6.BindMuxDataPort(ctx, binding); err != nil {
 				m.log.WithError(err).Warn("WDS IPv6 BindMuxDataPort 失败")
 			} else {
-				m.log.Infof("WDS IPv6 已绑定 MuxID=%d", m.cfg.MuxID)
+				m.log.Infof("WDS IPv6 已绑定 MuxID=%d", binding.MuxID)
 			}
 			cancel()
 		}
@@ -3454,6 +3454,9 @@ func (m *Manager) doConnect() error {
 	}
 
 	m.setState(StateConnected)
+	m.mu.Lock()
+	m.connectedDataPlaneGeneration = topology.Generation
+	m.mu.Unlock()
 	m.retryCount = 0
 	m.log.Info("Connection established successfully!")
 
@@ -3467,18 +3470,21 @@ func (m *Manager) doConnect() error {
 }
 
 func (m *Manager) configureNetwork() error {
-	// 多路拨号模式下，IP/DNS/Route 配置在虚拟网卡上
-	ifname := m.cfg.Device.NetInterface
-	m.mu.RLock()
-	if m.muxIface != "" {
-		ifname = m.muxIface
+	// Configure IP/DNS/routes on the interface published by topology
+	// convergence. Under QMAP the physical master only carries the muxes.
+	topology, master := m.defaultDataPlaneTarget()
+	ifname := topology.DefaultInterface
+	if ifname == "" {
+		ifname = m.cfg.Device.NetInterface
 	}
-	m.mu.RUnlock()
+	if master == "" {
+		master = m.cfg.Device.NetInterface
+	}
 	m.log.Infof("Configuring network interface %s...", ifname)
 
 	// 多路拨号时也要确保物理网卡是 up 的
-	if m.muxIface != "" && ifname != m.cfg.Device.NetInterface {
-		if err := netcfg.BringUp(m.cfg.Device.NetInterface); err != nil {
+	if topology.Mode == DataPlaneModeQMAP && ifname != master {
+		if err := netcfg.BringUp(master); err != nil {
 			m.log.WithError(err).Warn("Failed to bring master interface up")
 		}
 	}
@@ -3603,12 +3609,11 @@ func (m *Manager) doDisconnect() {
 
 	}
 
-	netcfg.FlushAddresses(m.cfg.Device.NetInterface)
-	netcfg.FlushRoutes(m.cfg.Device.NetInterface)
-	netcfg.BringDown(m.cfg.Device.NetInterface)
+	m.teardownDefaultDataInterface()
 
 	m.mu.Lock()
 	m.settings = nil
+	m.connectedDataPlaneGeneration = 0
 	m.mu.Unlock()
 
 	m.setState(StateDisconnected)
@@ -4680,4 +4685,85 @@ func (m *Manager) defaultDataPlaneTarget() (DataPlaneSnapshot, string) {
 	m.dataPlane.mu.Lock()
 	defer m.dataPlane.mu.Unlock()
 	return m.dataPlane.snapshot, m.dataPlane.masterInterface
+}
+
+// EnsureDataPlaneTopology converges the declared default topology.
+func (m *Manager) EnsureDataPlaneTopology(ctx context.Context) error {
+	_, err := m.ConvergeDataPlane(ctx, m.declaredDataPlaneSpec())
+	return err
+}
+
+// defaultMuxBinding builds the default QMAP binding using the endpoint
+// discovered from the physical master rather than a modem-specific constant.
+func (m *Manager) defaultMuxBinding() (qmi.MuxBinding, error) {
+	snapshot, master := m.defaultDataPlaneTarget()
+	if master == "" {
+		master = m.cfg.Device.NetInterface
+	}
+	endpointIfID, err := m.resolvedPDNOps().discoverEndpoint(master)
+	if err != nil {
+		return qmi.MuxBinding{}, fmt.Errorf("qmi manager: discover data endpoint for %s: %w", master, err)
+	}
+	return qmi.MuxBinding{
+		EpType:     0x02, // HSUSB
+		EpIfID:     endpointIfID,
+		MuxID:      snapshot.DefaultMuxID,
+		ClientType: 1, // Tethered
+	}, nil
+}
+
+// netcfgOps injects the host network mutations used when tearing down the
+// default data interface, so tests can substitute fake implementations.
+type netcfgOps struct {
+	flushAddresses func(string) error
+	flushRoutes    func(string) error
+	bringDown      func(string) error
+}
+
+func (m *Manager) resolvedNetcfgOps() netcfgOps {
+	ops := m.netcfgOps
+	if ops.flushAddresses == nil {
+		ops.flushAddresses = netcfg.FlushAddresses
+	}
+	if ops.flushRoutes == nil {
+		ops.flushRoutes = netcfg.FlushRoutes
+	}
+	if ops.bringDown == nil {
+		ops.bringDown = netcfg.BringDown
+	}
+	return ops
+}
+
+// defaultDataInterface returns the netdev the default data connection owns:
+// the mux under QMAP, the physical interface under Native.
+func (m *Manager) defaultDataInterface() string {
+	topology, _ := m.defaultDataPlaneTarget()
+	if target := topology.DefaultInterface; target != "" {
+		return target
+	}
+	return m.cfg.Device.NetInterface
+}
+
+// flushDefaultDataAddresses drops the addresses on the default connection's
+// own netdev, without touching its link state or the physical master.
+func (m *Manager) flushDefaultDataAddresses() {
+	target := m.defaultDataInterface()
+	if err := m.resolvedNetcfgOps().flushAddresses(target); err != nil {
+		m.log.WithError(err).Debug("清理默认数据网卡地址失败")
+	}
+}
+
+// teardownDefaultDataInterface clears only the default connection's netdev.
+func (m *Manager) teardownDefaultDataInterface() {
+	target := m.defaultDataInterface()
+	ops := m.resolvedNetcfgOps()
+	if err := ops.flushAddresses(target); err != nil {
+		m.log.WithError(err).Debug("清理默认数据网卡地址失败")
+	}
+	if err := ops.flushRoutes(target); err != nil {
+		m.log.WithError(err).Debug("清理默认数据网卡路由失败")
+	}
+	if err := ops.bringDown(target); err != nil {
+		m.log.WithError(err).Debug("关闭默认数据网卡失败")
+	}
 }

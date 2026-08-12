@@ -68,6 +68,10 @@ type NetworkConfigurator interface {
 
 	// EnableRawIP 在网卡上开启 Raw IP 模式
 	EnableRawIP(ifname string) error
+
+	// ReconcileResidualMux 删除 masterIface 下不在 keepMuxIDs 中的所有 QMAP
+	// mux（清理上次进程异常退出遗留的状态），返回被删除的 mux_id 列表。
+	ReconcileResidualMux(masterIface string, keepMuxIDs []uint8) ([]uint8, error)
 }
 
 var currentConfigurator NetworkConfigurator
