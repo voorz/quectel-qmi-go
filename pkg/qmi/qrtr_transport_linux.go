@@ -178,7 +178,7 @@ func (t *qrtrTransport) Write(p []byte) (int, error) {
 	}
 	body := frame[fh.headerSize:]
 
-	if fh.serviceType == ServiceControl {
+	if fh.serviceType == uint16(ServiceControl) {
 		if err := t.handleCTLWrite(body); err != nil {
 			return 0, err
 		}
@@ -571,7 +571,7 @@ func marshalCTLResponseFrame(txID uint8, msgID uint16, tlvs []TLV) []byte {
 		Length:        uint16(len(tlvBytes)),
 	}
 	body := append(ctlH.Marshal(), tlvBytes...)
-	return append(marshalFrameHeader(ServiceControl, 0, len(body)), body...)
+	return append(marshalFrameHeader(uint16(ServiceControl), 0, len(body)), body...)
 }
 
 func (t *qrtrTransport) replyCTLError(txID uint8, msgID uint16, errCode uint16) error {

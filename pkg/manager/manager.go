@@ -925,6 +925,22 @@ func (m *Manager) IsConnected() bool {
 	return m.state == StateConnected
 }
 
+// SetProfileIndex updates the PDN Profile index used for the next data call.
+// 0 means "use modem default profile". Safe to call before Connect().
+func (m *Manager) SetProfileIndex(idx uint8) {
+	m.mu.Lock()
+	m.cfg.ProfileIndex = idx
+	m.mu.Unlock()
+}
+
+// SetAPN updates the APN used for the next data call.
+// Safe to call before Connect() to apply a runtime APN change.
+func (m *Manager) SetAPN(apn string) {
+	m.mu.Lock()
+	m.cfg.APN = apn
+	m.mu.Unlock()
+}
+
 // Settings returns the current IP settings / Settings 返回当前的 IP 设置
 func (m *Manager) Settings() *qmi.RuntimeSettings {
 	m.mu.RLock()
@@ -3420,6 +3436,14 @@ func (m *Manager) doConnect() error {
 
 	// Start IPv4 data call / 启动IPv4数据呼叫
 	if m.cfg.EnableIPv4 {
+		// 先无条件清理模组可能残留的 data call（auto-connect / 前次会话遗留），
+		// 避免 INTERFACE_IN_USE 错误。GetPacketServiceStatus 可能检测不到其他
+		// WDS client 发起的 data call，因此直接 StopAnyNetworkInterface。
+		if m.wds != nil {
+			if err := m.wds.StopAnyNetworkInterface(dialCtx, true); err != nil {
+				m.log.WithError(err).Debug("Pre-dial StopAnyNetworkInterface failed (non-fatal)")
+			}
+		}
 		m.log.Info("Starting IPv4 data call...")
 		handle, err := m.wds.StartNetworkInterface(dialCtx,
 			m.cfg.APN, m.cfg.Username, m.cfg.Password, m.cfg.AuthType, qmi.IpFamilyV4)
