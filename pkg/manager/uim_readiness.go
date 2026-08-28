@@ -58,6 +58,7 @@ func isUIMReadinessTransportFatal(err error) bool {
 		"client closed",
 		"read failed: eof",
 		"read failed eof",
+		"input/output error",
 	} {
 		if strings.Contains(msg, fragment) {
 			return true
