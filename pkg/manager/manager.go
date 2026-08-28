@@ -221,11 +221,17 @@ type Manager struct {
 	wmsRecoveryMu           sync.Mutex
 	wmsReplayMu             sync.Mutex
 	voiceRecoveryMu         sync.Mutex
+	imsRecoveryMu           sync.Mutex
+	imsaRecoveryMu          sync.Mutex
 	uimLastRecoverSignal    time.Time
 	uimRecoverCooldown      time.Duration
 	wmsReplayInProgress     bool
 	serviceTimeoutMu        sync.Mutex
 	serviceTimeoutFailures  map[serviceTimeoutKey]serviceTimeoutWindow
+
+	globalTimeoutMu         sync.Mutex
+	globalTimeoutServices   map[string]time.Time
+	globalTimeoutStormAt    time.Time
 
 	// Data-plane topology / 数据面拓扑
 	dataPlane                   dataPlaneController
@@ -233,6 +239,14 @@ type Manager struct {
 	pdnOps                      pdnOps
 	netcfgOps                   netcfgOps
 	connectedDataPlaneGeneration uint64
+
+	// imsProbeSlot serializes temporary IMS WDS calls without serializing
+	// unrelated QMI operations. The probe is a real modem data call, so two
+	// concurrent probes must not race the modem's duplicate-call matching.
+	imsProbeSlot    chan struct{}
+	imsProbeWG      sync.WaitGroup
+	imsProbeCancel  context.CancelFunc
+	imsProbeBlocked bool
 
 	// SMS recovery state / 短信恢复状态
 	lastKnownGoodRoutes        *qmi.WMSRouteConfig
@@ -282,10 +296,15 @@ type Manager struct {
 	rebindWMSServiceHook              func(reason string) (*qmi.WMSService, error)
 	ensureVOICEServiceHook            func() (*qmi.VOICEService, error)
 	rebindVOICEServiceHook            func(reason string) (*qmi.VOICEService, error)
+	ensureIMSServiceHook              func() (*qmi.IMSService, error)
+	rebindIMSServiceHook              func(reason string) (*qmi.IMSService, error)
+	ensureIMSAServiceHook             func() (*qmi.IMSAService, error)
+	rebindIMSAServiceHook             func(reason string) (*qmi.IMSAService, error)
 	openLogicalChannelHook            func(ctx context.Context, slot uint8, aid []byte) (byte, error)
 	closeLogicalChannelHook           func(ctx context.Context, slot uint8, channel uint8) error
 	sendAPDUHook                      func(ctx context.Context, slot uint8, channel uint8, command []byte) ([]byte, error)
 	newWDSService                     func(ctx context.Context, client *qmi.Client) (*qmi.WDSService, error)
+	imsProbeOps                       imsProbeOps
 	newNASService                     func(ctx context.Context, client *qmi.Client) (*qmi.NASService, error)
 	newDMSService                     func(ctx context.Context, client *qmi.Client) (*qmi.DMSService, error)
 	newUIMService                     func(ctx context.Context, client *qmi.Client) (*qmi.UIMService, error)
@@ -313,6 +332,10 @@ type Manager struct {
 
 	// 设备状态快照（由 NAS Indication 事件驱动，供上层零 IPC 读取）
 	snapshot DeviceSnapshot
+
+	// cardAccess protects DMS/UIM card operations from the IMS PDN bring-up
+	// window. IMS AKA APDU operations deliberately remain outside this gate.
+	cardAccess cardAccessGate
 }
 
 // internalEvent represents an internal event for the manager's event loop. / internalEvent 表示管理器事件循环的内部事件。
@@ -546,6 +569,9 @@ func (m *Manager) StartCoreContext(ctx context.Context) error {
 		m.mu.Unlock()
 		return fmt.Errorf("manager already started")
 	}
+	// A previous failed start or an intentional Stop leaves cleanup's probe
+	// barrier closed. A fresh core start creates a new lifecycle epoch.
+	m.imsProbeBlocked = false
 	m.state = StateConnecting
 	m.desiredConnection = false
 	m.mu.Unlock()
@@ -2697,6 +2723,8 @@ func (m *Manager) cleanup() {
 	m.stopScheduledTimers()
 	cleanupCtx, cancel := m.opContext(m.cfg.Timeouts.Stop)
 	defer cancel()
+	// Block IMS probes before clearing shared QMI services.
+	m.blockIMSProbes()
 	// Secondary PDNs own independent WDS clients and muxes, but share this
 	// manager's transport. Release them before clearing the shared services.
 	m.closeManagedPDNSessions(cleanupCtx)
@@ -3170,6 +3198,7 @@ func (m *Manager) doRecoverFromModemReset() bool {
 
 	m.mu.Lock()
 	m.markCoreReadyLocked("recover_converged")
+	m.imsProbeBlocked = false
 	m.mu.Unlock()
 	m.setState(StateDisconnected)
 	if desiredConnection && m.cfg.AutoReconnect {

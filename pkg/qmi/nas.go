@@ -140,15 +140,26 @@ type NetworkScanResult struct {
 
 // SignalInfo contains detailed signal strength information / SignalInfo 包含详细的信号强度信息
 type SignalInfo struct {
-	// LTE specific
-	LTERSRP  int16 // Reference Signal Received Power
-	LTERSRQ  int16 // Reference Signal Received Quality
-	LTERSSNR int16 // Signal-to-Noise Ratio
+	// LTE and NR5G are nil when the response has no corresponding signal TLV.
+	// Measurements use qmicli's native protocol units.
+	LTE  *LTESignalInfo
+	NR5G *NR5GSignalInfo
+}
 
-	// 5G specific
-	NR5GRSRP int16
-	NR5GRSRQ int16
-	NR5GSINR int16
+// LTESignalInfo mirrors NAS Get Signal Info units used by libqmi: RSRP is
+// dBm, RSRQ is dB, and SNR is 0.1 dB.
+type LTESignalInfo struct {
+	RSRP *int16
+	RSRQ *int16
+	SNR  *int16
+}
+
+// NR5GSignalInfo mirrors NAS Get Signal Info units used by libqmi: RSRP is
+// dBm, RSRQ is dB, and SNR is 0.1 dB.
+type NR5GSignalInfo struct {
+	RSRP *int16
+	RSRQ *int16
+	SNR  *int16
 }
 
 // SysInfo contains system information / SysInfo 包含系统信息
@@ -273,7 +284,8 @@ type UMTSCellLocationInfo struct {
 	ECIO                  int16
 }
 
-// LTECellNeighbor contains one LTE neighboring-cell measurement.
+// LTECellNeighbor contains one LTE neighboring-cell measurement. RSRQ, RSRP,
+// and RSSI are raw QMI measurements in 0.1 dB/dBm units.
 type LTECellNeighbor struct {
 	PhysicalCellID       uint16
 	RSRQ                 int16
@@ -319,11 +331,11 @@ type NR5GCellLocationInfo struct {
 	TAC            uint32
 	GlobalCellID   uint64
 	PhysicalCellID uint16
-	RSRQ           int16
-	RSRP           int16
-	SNR            int16
-	ARFCN          uint32
-	HasARFCN       bool
+	// Signal measurements use 0.1 dB units. nil represents QMI 0x8000.
+	RSRQ  *int16
+	RSRP  *int16
+	SNR   *int16
+	ARFCN *uint32
 }
 
 // CellLocationInfo combines serving-cell details from different RAT families.
@@ -335,8 +347,12 @@ type CellLocationInfo struct {
 	ObservedNR5GARFCN *uint32
 }
 
-// activeBandToLTEBand maps the QMI NAS "active_band" enum value to the
-// corresponding 3GPP E-UTRA band number.
+// activeBandToLTEBand maps the QMI NAS "active_band" enum value (as reported
+// in RF Band Information for radio_if == LTE) to the corresponding 3GPP
+// E-UTRA band number. The enum is not a simple offset from the band number
+// (e.g. band 17 comes before band 18 numerically in the enum but not in the
+// value space), so a lookup table is required. Values taken from libqmi's
+// QmiNasActiveBand (qmi-enums-nas.h).
 var activeBandToLTEBand = map[uint16]uint16{
 	120: 1, 121: 2, 122: 3, 123: 4, 124: 5, 125: 6, 126: 7, 127: 8, 128: 9,
 	129: 10, 130: 11, 131: 12, 132: 13, 133: 14, 134: 17,
@@ -347,11 +363,17 @@ var activeBandToLTEBand = map[uint16]uint16{
 	161: 66, 168: 71, 155: 125, 156: 126, 157: 127, 162: 250,
 }
 
+// LTEBandNumberFromActiveBand converts a QMI NAS active_band enum value into
+// its real 3GPP E-UTRA band number. ok is false if the value has no known
+// LTE band mapping (e.g. it belongs to another RAT's band-class range).
 func LTEBandNumberFromActiveBand(active uint16) (band uint16, ok bool) {
 	band, ok = activeBandToLTEBand[active]
 	return band, ok
 }
 
+// activeBandToNR5GBand maps QMI NAS ActiveBand values to 3GPP NR band
+// numbers. These enum values are non-contiguous; keep the mapping aligned
+// with libqmi's QmiNasActiveBand definition.
 var activeBandToNR5GBand = map[uint16]uint16{
 	250: 1, 251: 2, 252: 3, 253: 5, 254: 7, 255: 8,
 	256: 20, 257: 28, 258: 38, 259: 41, 260: 50, 261: 51,
@@ -364,11 +386,15 @@ var activeBandToNR5GBand = map[uint16]uint16{
 	298: 91, 299: 92, 300: 93, 301: 94,
 }
 
+// NR5GBandNumberFromActiveBand converts a QMI NAS NR active-band enum into
+// its 3GPP NR band number.
 func NR5GBandNumberFromActiveBand(active uint16) (band uint16, ok bool) {
 	band, ok = activeBandToNR5GBand[active]
 	return band, ok
 }
 
+// IsNR5GRadioInterface accepts the standard QMI 5GNR value and the legacy
+// value emitted by some modem firmware.
 func IsNR5GRadioInterface(radioInterface uint8) bool {
 	return radioInterface == 0x0C || radioInterface == 0x0A
 }
@@ -381,7 +407,11 @@ func GetLTEDuplexModeFromBandInfo(info *RFBandInfo) string {
 		if band.RadioInterface != 0x08 {
 			continue
 		}
-		if duplex := getLTEDuplexModeFromBand(band.ActiveBandClass); duplex != "" {
+		lteBand, ok := LTEBandNumberFromActiveBand(band.ActiveBandClass)
+		if !ok {
+			continue
+		}
+		if duplex := getLTEDuplexModeFromBand(lteBand); duplex != "" {
 			return duplex
 		}
 	}
@@ -588,6 +618,27 @@ type SignalStrength struct {
 	RSRP int16 // dBm (for LTE) / dBm (用于LTE)
 	RSRQ int8  // dB (for LTE) / dB (用于LTE)
 	SNR  int16 // dB * 10 (for LTE) / dB * 10 (用于LTE)
+}
+
+// NoMeasurementRSSIdBm 是 NAS Get Signal Strength 在"尚无测量结果"时返回的哨兵值。
+const NoMeasurementRSSIdBm int8 = -125
+
+// HasMeasurement 报告这份读数是否真的携带测量结果。
+//
+// 射频刚从 RFOff 恢复时模组还没做完 LTE 测量，NAS Get Signal Strength(0x0020) 仍会
+// **成功**返回，但 RSSI 是 -125 哨兵、且响应里根本没有 RSRP/RSRQ/SNR 的 TLV。同一时刻
+// 更现代的 NAS Get Signal Info(0x004F) 是诚实报 QMI_ERR_INFO_UNAVAILABLE 的——两个 API
+// 的失败语义不对等，把 legacy 的哨兵当成读数缓存下来，界面就会长期显示"无信号"。
+//
+// 判据是"哨兵 RSSI 且无任何伴随字段"：真实弱信号场景下 RSRP/RSRQ/SNR 至少有一个非零。
+func (s *SignalStrength) HasMeasurement() bool {
+	if s == nil {
+		return false
+	}
+	if s.RSSI != NoMeasurementRSSIdBm {
+		return true
+	}
+	return s.RSRP != 0 || s.RSRQ != 0 || s.SNR != 0
 }
 
 // GetSignalStrength queries current signal strength / GetSignalStrength查询当前信号强度
@@ -1161,15 +1212,29 @@ func parseSignalInfoPacket(packet *Packet) (*SignalInfo, error) {
 	info := &SignalInfo{}
 
 	if tlv := FindTLV(packet.TLVs, 0x14); tlv != nil && len(tlv.Value) >= 6 {
-		info.LTERSRQ = int16(int8(tlv.Value[1]))
-		info.LTERSRP = int16(binary.LittleEndian.Uint16(tlv.Value[2:4]))
-		info.LTERSSNR = int16(binary.LittleEndian.Uint16(tlv.Value[4:6]))
+		rsrq := int16(int8(tlv.Value[1]))
+		rsrp := int16(binary.LittleEndian.Uint16(tlv.Value[2:4]))
+		snr := int16(binary.LittleEndian.Uint16(tlv.Value[4:6]))
+		info.LTE = &LTESignalInfo{RSRQ: &rsrq, RSRP: &rsrp, SNR: &snr}
 	}
 
-	if tlv := FindTLV(packet.TLVs, 0x17); tlv != nil && len(tlv.Value) >= 6 {
-		info.NR5GRSRP = int16(binary.LittleEndian.Uint16(tlv.Value[2:4]))
-		info.NR5GRSRQ = int16(binary.LittleEndian.Uint16(tlv.Value[0:2]))
-		info.NR5GSINR = int16(binary.LittleEndian.Uint16(tlv.Value[4:6]))
+	if tlv := FindTLV(packet.TLVs, 0x17); tlv != nil && len(tlv.Value) >= 4 {
+		info.NR5G = &NR5GSignalInfo{}
+		if rsrp := int16(binary.LittleEndian.Uint16(tlv.Value[0:2])); rsrp != -32768 {
+			info.NR5G.RSRP = &rsrp
+		}
+		if sinr := int16(binary.LittleEndian.Uint16(tlv.Value[2:4])); sinr != -32768 {
+			info.NR5G.SNR = &sinr
+		}
+	}
+
+	if tlv := FindTLV(packet.TLVs, 0x18); tlv != nil && len(tlv.Value) >= 2 {
+		if info.NR5G == nil {
+			info.NR5G = &NR5GSignalInfo{}
+		}
+		if rsrq := int16(binary.LittleEndian.Uint16(tlv.Value[0:2])); rsrq != -32768 {
+			info.NR5G.RSRQ = &rsrq
+		}
 	}
 
 	return info, nil
@@ -1432,12 +1497,26 @@ func parseSystemSelectionPreferenceResponse(resp *Packet) (*SystemSelectionPrefe
 	return info, nil
 }
 
+func ParseCellLocationInfoIndication(packet *Packet) (*CellLocationInfo, error) {
+	return parseCellLocationInfoPacket(packet, false)
+}
+
 func parseCellLocationInfoResponse(resp *Packet) (*CellLocationInfo, error) {
-	if err := resp.CheckResult(); err != nil {
-		return nil, fmt.Errorf("get cell location info failed: %w", err)
+	return parseCellLocationInfoPacket(resp, true)
+}
+
+func parseCellLocationInfoPacket(resp *Packet, checkResult bool) (*CellLocationInfo, error) {
+	if resp == nil {
+		return nil, fmt.Errorf("cell location info packet is nil")
+	}
+	if checkResult {
+		if err := resp.CheckResult(); err != nil {
+			return nil, fmt.Errorf("get cell location info failed: %w", err)
+		}
 	}
 
 	info := &CellLocationInfo{}
+	hasNR5GLocationTLV := false
 
 	if tlv := FindTLV(resp.TLVs, 0x10); tlv != nil && len(tlv.Value) >= 18 {
 		mcc, mnc := decodeBCDPLMN(tlv.Value[4:7])
@@ -1490,7 +1569,54 @@ func parseCellLocationInfoResponse(resp *Packet) (*CellLocationInfo, error) {
 		if lte.UEInIdle {
 			lte.HasIdleThresholds = true
 		}
+		if len(tlv.Value) >= 19 {
+			const cellSize = 10
+			cellsLen := int(tlv.Value[18])
+			if len(tlv.Value) >= 19+cellsLen*cellSize {
+				lte.IntraFrequencyNeighbors = make([]LTECellNeighbor, 0, cellsLen)
+				for i := 0; i < cellsLen; i++ {
+					offset := 19 + i*cellSize
+					lte.IntraFrequencyNeighbors = append(lte.IntraFrequencyNeighbors, parseLTECellNeighbor(tlv.Value[offset:offset+cellSize]))
+				}
+			}
+		}
 		info.LTE = lte
+	}
+
+	if tlv := FindTLV(resp.TLVs, 0x14); tlv != nil && len(tlv.Value) >= 2 {
+		ueInIdle := tlv.Value[0] != 0
+		frequencies := int(tlv.Value[1])
+		if info.LTE == nil {
+			info.LTE = &LTECellLocationInfo{UEInIdle: ueInIdle}
+		}
+		offset := 2
+		for i := 0; i < frequencies; i++ {
+			const frequencyHeaderSize = 6
+			const cellSize = 10
+			if offset+frequencyHeaderSize > len(tlv.Value) {
+				break
+			}
+			frequency := LTECellInterFrequency{
+				EARFCN:                   binary.LittleEndian.Uint16(tlv.Value[offset : offset+2]),
+				CellSelectionRXLevelLow:  tlv.Value[offset+2],
+				CellSelectionRXLevelHigh: tlv.Value[offset+3],
+			}
+			if ueInIdle {
+				frequency.CellReselectionPriority = tlv.Value[offset+4]
+				frequency.HasCellReselectionPriority = true
+			}
+			cellsLen := int(tlv.Value[offset+5])
+			offset += frequencyHeaderSize
+			if offset+cellsLen*cellSize > len(tlv.Value) {
+				break
+			}
+			frequency.Neighbors = make([]LTECellNeighbor, 0, cellsLen)
+			for j := 0; j < cellsLen; j++ {
+				frequency.Neighbors = append(frequency.Neighbors, parseLTECellNeighbor(tlv.Value[offset:offset+cellSize]))
+				offset += cellSize
+			}
+			info.LTE.InterFrequencyNeighbors = append(info.LTE.InterFrequencyNeighbors, frequency)
+		}
 	}
 
 	if tlv := FindTLV(resp.TLVs, 0x17); tlv != nil && len(tlv.Value) >= 4 {
@@ -1512,35 +1638,56 @@ func parseCellLocationInfoResponse(resp *Packet) (*CellLocationInfo, error) {
 	}
 
 	if tlv := FindTLV(resp.TLVs, 0x2E); tlv != nil && len(tlv.Value) >= 4 {
-		if info.NR5G == nil {
-			info.NR5G = &NR5GCellLocationInfo{}
-		}
-		info.NR5G.ARFCN = binary.LittleEndian.Uint32(tlv.Value[0:4])
-		info.NR5G.HasARFCN = true
+		hasNR5GLocationTLV = true
+		arfcn := binary.LittleEndian.Uint32(tlv.Value[0:4])
+		info.ObservedNR5GARFCN = &arfcn
 	}
 
 	if tlv := FindTLV(resp.TLVs, 0x2F); tlv != nil && len(tlv.Value) >= 20 {
+		hasNR5GLocationTLV = true
 		mcc, mnc := decodeBCDPLMN(tlv.Value[0:3])
-		if info.NR5G == nil {
-			info.NR5G = &NR5GCellLocationInfo{}
+		nr := &NR5GCellLocationInfo{
+			MCC:            mcc,
+			MNC:            mnc,
+			TAC:            decodeUint24(tlv.Value[3:6]),
+			GlobalCellID:   binary.LittleEndian.Uint64(tlv.Value[6:14]),
+			PhysicalCellID: binary.LittleEndian.Uint16(tlv.Value[14:16]),
 		}
-		info.NR5G.MCC = mcc
-		info.NR5G.MNC = mnc
-		info.NR5G.TAC = decodeUint24(tlv.Value[3:6])
-		info.NR5G.GlobalCellID = binary.LittleEndian.Uint64(tlv.Value[6:14])
-		info.NR5G.PhysicalCellID = binary.LittleEndian.Uint16(tlv.Value[14:16])
-		info.NR5G.RSRQ = int16(binary.LittleEndian.Uint16(tlv.Value[16:18]))
-		info.NR5G.RSRP = int16(binary.LittleEndian.Uint16(tlv.Value[18:20]))
+		if rsrq := int16(binary.LittleEndian.Uint16(tlv.Value[16:18])); rsrq != -32768 {
+			nr.RSRQ = &rsrq
+		}
+		if rsrp := int16(binary.LittleEndian.Uint16(tlv.Value[18:20])); rsrp != -32768 {
+			nr.RSRP = &rsrp
+		}
 		if len(tlv.Value) >= 22 {
-			info.NR5G.SNR = int16(binary.LittleEndian.Uint16(tlv.Value[20:22]))
+			if snr := int16(binary.LittleEndian.Uint16(tlv.Value[20:22])); snr != -32768 {
+				nr.SNR = &snr
+			}
+		}
+		if nr.GlobalCellID != 0 {
+			info.NR5G = nr
 		}
 	}
+	if info.NR5G != nil && info.ObservedNR5GARFCN != nil {
+		arfcn := *info.ObservedNR5GARFCN
+		info.NR5G.ARFCN = &arfcn
+	}
 
-	if info.GERAN == nil && info.UMTS == nil && info.LTE == nil && info.NR5G == nil {
+	if info.GERAN == nil && info.UMTS == nil && info.LTE == nil && info.NR5G == nil && !hasNR5GLocationTLV {
 		return nil, fmt.Errorf("no cell location TLVs in response")
 	}
 
 	return info, nil
+}
+
+func parseLTECellNeighbor(value []byte) LTECellNeighbor {
+	return LTECellNeighbor{
+		PhysicalCellID:       binary.LittleEndian.Uint16(value[0:2]),
+		RSRQ:                 int16(binary.LittleEndian.Uint16(value[2:4])),
+		RSRP:                 int16(binary.LittleEndian.Uint16(value[4:6])),
+		RSSI:                 int16(binary.LittleEndian.Uint16(value[6:8])),
+		CellSelectionRXLevel: int16(binary.LittleEndian.Uint16(value[8:10])),
+	}
 }
 
 func parseNetworkTimePacket(packet *Packet, checkResult bool) (*NetworkTimeInfo, error) {
@@ -1768,23 +1915,8 @@ func decodeBCDPLMN(plmn []byte) (string, string) {
 	return mcc, fmt.Sprintf("%d%d%d", mnc1, mnc2, mnc3)
 }
 
-// ParseCellLocationInfoIndication parses a cell location info indication packet.
-func ParseCellLocationInfoIndication(packet *Packet) (*CellLocationInfo, error) {
-	return parseCellLocationInfoResponse(packet)
-}
-
-func parseLTECellNeighbor(value []byte) LTECellNeighbor {
-	return LTECellNeighbor{
-		PhysicalCellID:       binary.LittleEndian.Uint16(value[0:2]),
-		RSRQ:                 int16(binary.LittleEndian.Uint16(value[2:4])),
-		RSRP:                 int16(binary.LittleEndian.Uint16(value[4:6])),
-		RSSI:                 int16(binary.LittleEndian.Uint16(value[6:8])),
-		CellSelectionRXLevel: int16(binary.LittleEndian.Uint16(value[8:10])),
-	}
-}
-
 // ============================================================================
-// LTE Carrier Aggregation Info
+// Additions for LTE Cphy CA Info and Tx Rx Info
 // ============================================================================
 
 type NASPhyCAPCellInfo struct {
@@ -1800,7 +1932,7 @@ type NASPhyCASCellInfo struct {
 	DLBandwidth    uint32
 	LTEBand        uint16
 	State          uint32
-	CellIndex      uint8
+	CellIndex      uint8 // Only available in array TLV (0x15)
 }
 
 type NASLTECphyCAInfo struct {
@@ -1811,6 +1943,7 @@ type NASLTECphyCAInfo struct {
 	SCells      []NASPhyCASCellInfo
 }
 
+// GetLTECphyCAInfo retrieves the LTE Carrier Aggregation information.
 func (n *NASService) GetLTECphyCAInfo(ctx context.Context) (*NASLTECphyCAInfo, error) {
 	resp, err := n.client.SendRequest(ctx, ServiceNAS, n.clientID, NASGetLTECphyCAInfo, nil)
 	if err != nil {
@@ -1825,6 +1958,7 @@ func (n *NASService) GetLTECphyCAInfo(ctx context.Context) (*NASLTECphyCAInfo, e
 	if tlv := FindTLV(resp.TLVs, 0x11); tlv != nil && len(tlv.Value) == 4 {
 		info.DLBandwidth = binary.LittleEndian.Uint32(tlv.Value)
 	}
+
 	if tlv := FindTLV(resp.TLVs, 0x13); tlv != nil && len(tlv.Value) == 10 {
 		info.HasPCell = true
 		info.PCell.PhysicalCellID = binary.LittleEndian.Uint16(tlv.Value[0:2])
@@ -1832,9 +1966,12 @@ func (n *NASService) GetLTECphyCAInfo(ctx context.Context) (*NASLTECphyCAInfo, e
 		info.PCell.DLBandwidth = binary.LittleEndian.Uint32(tlv.Value[4:8])
 		info.PCell.LTEBand = binary.LittleEndian.Uint16(tlv.Value[8:10])
 	}
+
 	if tlv := FindTLV(resp.TLVs, 0x14); tlv != nil && len(tlv.Value) == 1 {
 		info.SCellIndex = tlv.Value[0]
 	}
+
+	// Try the new array TLV first (0x15)
 	if tlv := FindTLV(resp.TLVs, 0x15); tlv != nil && len(tlv.Value) >= 1 {
 		count := int(tlv.Value[0])
 		offset := 1
@@ -1854,6 +1991,7 @@ func (n *NASService) GetLTECphyCAInfo(ctx context.Context) (*NASLTECphyCAInfo, e
 			offset += 15
 		}
 	} else if tlv := FindTLV(resp.TLVs, 0x12); tlv != nil && len(tlv.Value) == 14 {
+		// Fallback to older single SCell TLV (0x12)
 		scell := NASPhyCASCellInfo{
 			PhysicalCellID: binary.LittleEndian.Uint16(tlv.Value[0:2]),
 			RxChannel:      binary.LittleEndian.Uint16(tlv.Value[2:4]),
@@ -1867,10 +2005,6 @@ func (n *NASService) GetLTECphyCAInfo(ctx context.Context) (*NASLTECphyCAInfo, e
 
 	return info, nil
 }
-
-// ============================================================================
-// Tx/Rx Info
-// ============================================================================
 
 type NASTxRxChainInfo struct {
 	IsRadioTuned bool
@@ -1899,8 +2033,11 @@ type NASTxRxInfo struct {
 	Tx          NASTxInfo
 }
 
+// GetTxRxInfo retrieves Tx and Rx power info. radioInterface specifies the RAT (e.g. 0x08 for LTE).
 func (n *NASService) GetTxRxInfo(ctx context.Context, radioInterface uint8) (*NASTxRxInfo, error) {
-	reqTLVs := []TLV{NewTLVUint8(0x01, radioInterface)}
+	reqTLVs := []TLV{
+		NewTLVUint8(0x01, radioInterface),
+	}
 	resp, err := n.client.SendRequest(ctx, ServiceNAS, n.clientID, NASGetTxRxInfo, reqTLVs)
 	if err != nil {
 		return nil, err

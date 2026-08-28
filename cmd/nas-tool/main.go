@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/voorz/quectel-qmi-go/pkg/qmi"
@@ -13,10 +15,11 @@ import (
 
 func main() {
 	devicePath := flag.String("device", defaultQmiDevice(), "Path to QMI device")
-	action := flag.String("action", "all", "Action: all, serving, signal, signal-info, sysinfo, scan, register, dump")
+	action := flag.String("action", "all", "Action: all, serving, signal, signal-info, sysinfo, scan, cell-info, register, dump")
+	useQRTR := flag.Bool("qrtr", false, "Use native QRTR (AF_QIPCRTR) transport instead of a cdc-wdm device")
 	flag.Parse()
 
-	client, err := qmi.NewClientWithOptions(context.Background(), *devicePath, qmi.ClientOptions{})
+	client, err := qmi.NewClientWithOptions(context.Background(), *devicePath, qmi.ClientOptions{UseQRTR: *useQRTR})
 	if err != nil {
 		log.Fatalf("Failed to create QMI client: %v", err)
 	}
@@ -39,6 +42,7 @@ func main() {
 		runSignalInfo(ctx, nas)
 		runSysInfo(ctx, nas)
 		runScan(nas)
+		runCellLocationInfo(ctx, nas)
 	case "serving":
 		runServing(ctx, nas)
 	case "signal":
@@ -49,6 +53,8 @@ func main() {
 		runSysInfo(ctx, nas)
 	case "scan":
 		runScan(nas)
+	case "cell-info":
+		runCellLocationInfo(ctx, nas)
 	case "register":
 		runRegister(nas)
 	case "dump":
@@ -105,13 +111,27 @@ func runSignalInfo(ctx context.Context, nas *qmi.NASService) {
 		log.Printf("GetSignalInfo failed: %v", err)
 		return
 	}
-	fmt.Printf("LTE RSRP: %d\n", info.LTERSRP)
-	fmt.Printf("LTE RSRQ: %d\n", info.LTERSRQ)
-	fmt.Printf("LTE RSSNR: %d\n", info.LTERSSNR)
-	fmt.Printf("NR5G RSRP: %d\n", info.NR5GRSRP)
-	fmt.Printf("NR5G RSRQ: %d\n", info.NR5GRSRQ)
-	fmt.Printf("NR5G SINR: %d\n", info.NR5GSINR)
+	if info.LTE != nil {
+		fmt.Printf("LTE RSRP: %s\n", formatOptionalDB(info.LTE.RSRP, 1))
+		fmt.Printf("LTE RSRQ: %s\n", formatOptionalDB(info.LTE.RSRQ, 1))
+		fmt.Printf("LTE SNR: %s\n", formatOptionalDB(info.LTE.SNR, 10))
+	}
+	if info.NR5G != nil {
+		fmt.Printf("NR5G RSRP: %s\n", formatOptionalDB(info.NR5G.RSRP, 1))
+		fmt.Printf("NR5G RSRQ: %s\n", formatOptionalDB(info.NR5G.RSRQ, 1))
+		fmt.Printf("NR5G SNR: %s\n", formatOptionalDB(info.NR5G.SNR, 10))
+	}
 	fmt.Println()
+}
+
+func formatOptionalDB(value *int16, scale float64) string {
+	if value == nil {
+		return "n/a"
+	}
+	if scale == 1 {
+		return strconv.FormatInt(int64(*value), 10)
+	}
+	return fmt.Sprintf("%.1f", float64(*value)/scale)
 }
 
 func runSysInfo(ctx context.Context, nas *qmi.NASService) {
@@ -140,6 +160,34 @@ func runScan(nas *qmi.NASService) {
 		fmt.Printf("PLMN: %s-%s status=%d rats=%v desc=%q\n", r.MCC, r.MNC, r.Status, r.RATs, r.Description)
 	}
 	fmt.Println()
+}
+
+func runCellLocationInfo(ctx context.Context, nas *qmi.NASService) {
+	info, err := nas.GetCellLocationInfo(ctx)
+	if err != nil {
+		log.Printf("GetCellLocationInfo failed: %v", err)
+		return
+	}
+	fmt.Print(formatCellLocationInfo(info))
+}
+
+func formatCellLocationInfo(info *qmi.CellLocationInfo) string {
+	var output bytes.Buffer
+	output.WriteString("=== NAS Cell Location Info ===\n")
+	if info == nil {
+		return output.String()
+	}
+	if info.LTE != nil {
+		fmt.Fprintf(&output, "LTE: PLMN=%s-%s EARFCN=%d PCI=%d\n", info.LTE.MCC, info.LTE.MNC, info.LTE.EARFCN, info.LTE.ServingCellID)
+		for _, neighbor := range info.LTE.IntraFrequencyNeighbors {
+			fmt.Fprintf(&output, "LTE neighbor PCI=%d RSRP=%.1f dBm RSRQ=%.1f dB\n", neighbor.PhysicalCellID, float64(neighbor.RSRP)/10, float64(neighbor.RSRQ)/10)
+		}
+	}
+	if info.NR5G != nil {
+		fmt.Fprintf(&output, "NR5G: PLMN=%s-%s PCI=%d RSRP: %s dBm RSRQ: %s dB SNR: %s dB\n", info.NR5G.MCC, info.NR5G.MNC, info.NR5G.PhysicalCellID, formatOptionalDB(info.NR5G.RSRP, 10), formatOptionalDB(info.NR5G.RSRQ, 10), formatOptionalDB(info.NR5G.SNR, 10))
+	}
+	output.WriteByte('\n')
+	return output.String()
 }
 
 func runDump(ctx context.Context, client *qmi.Client, nas *qmi.NASService) {

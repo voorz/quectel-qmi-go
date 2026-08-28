@@ -15,6 +15,7 @@ var (
 	ErrPDNTopologyNotReady = errors.New("qmi manager: QMAP topology is not ready")
 	ErrPDNStart            = errors.New("qmi manager: start PDN network")
 	ErrRotateBlockedBySecondaryPDN = errors.New("qmi manager: IP rotation requires a radio reset, blocked by an active secondary PDN")
+	ErrManagerStopping     = errors.New("qmi manager: manager is stopping")
 )
 
 type PDNRequest struct {

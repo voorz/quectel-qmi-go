@@ -267,6 +267,12 @@ func (m *Manager) GetIMSI(ctx context.Context) (string, error) {
 
 // GetIMSIStrictLive 严格实时读取 IMSI（不依赖 snapshot 缓存）。
 func (m *Manager) GetIMSIStrictLive(ctx context.Context) (string, error) {
+	return withCardAccessValue(m, ctx, func() (string, error) {
+		return m.getIMSIStrictLive(ctx)
+	})
+}
+
+func (m *Manager) getIMSIStrictLive(ctx context.Context) (string, error) {
 	if m != nil && m.getIMSIStrictHook != nil {
 		return m.getIMSIStrictHook(ctx)
 	}
@@ -299,6 +305,12 @@ func (m *Manager) GetICCID(ctx context.Context) (string, error) {
 
 // GetICCIDStrictLive 严格实时读取 ICCID（不依赖 snapshot 缓存）。
 func (m *Manager) GetICCIDStrictLive(ctx context.Context) (string, error) {
+	return withCardAccessValue(m, ctx, func() (string, error) {
+		return m.getICCIDStrictLive(ctx)
+	})
+}
+
+func (m *Manager) getICCIDStrictLive(ctx context.Context) (string, error) {
 	if m != nil && m.getICCIDStrictHook != nil {
 		return m.getICCIDStrictHook(ctx)
 	}
