@@ -32,7 +32,7 @@ func shouldRecoverServiceError(service string, err error, serviceUnavailableText
 
 	if qe := qmi.GetQMIError(err); qe != nil {
 		switch qe.ErrorCode {
-		case qmi.QMIErrInvalidID, qmi.QMIErrDeviceNotReady, qmi.QMIErrClientIDsExhausted:
+		case qmi.QMIErrInternal, qmi.QMIErrInvalidID, qmi.QMIErrDeviceNotReady, qmi.QMIErrClientIDsExhausted:
 			return true
 		}
 		if qe.Service == qmi.ServiceControl && qe.MessageID == qmi.CTLGetClientID {

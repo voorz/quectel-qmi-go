@@ -34,7 +34,13 @@ func withUIMRecoveryValue[T any](m *Manager, op string, fn func(uim *qmi.UIMServ
 		return result, err
 	}
 
-	m.logServiceRecovery("UIM", op, "initial", err, "UIM operation failed; rebinding UIM service")
+	if qe := qmi.GetQMIError(err); qe != nil {
+		m.log.WithField("service_name", "UIM").WithField("op", op).
+			WithField("error_code", fmt.Sprintf("0x%04x", qe.ErrorCode)).
+			Warn("UIM operation failed with recoverable error; triggering rebind+retry")
+	} else {
+		m.logServiceRecovery("UIM", op, "initial", err, "UIM operation failed; rebinding UIM service")
+	}
 
 	m.uimRecoveryMu.Lock()
 	uim, rebindErr := m.rebindUIMService("recover:" + op)
@@ -44,6 +50,8 @@ func withUIMRecoveryValue[T any](m *Manager, op string, fn func(uim *qmi.UIMServ
 		m.triggerCoreRecoveryFromService("UIM", op, "rebind", rebindErr)
 		return zero, fmt.Errorf("%s: UIM rebind failed: %w (initial=%v)", op, rebindErr, err)
 	}
+
+	m.log.WithField("service_name", "UIM").WithField("op", op).Info("UIM service rebound successfully; retrying operation")
 
 	retryResult, retryErr := fn(uim)
 	if retryErr == nil {
