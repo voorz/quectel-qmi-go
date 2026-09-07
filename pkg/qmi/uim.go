@@ -1381,7 +1381,7 @@ func (u *UIMService) GetGID1(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return simRawHex(data), nil
+	return simGIDHex(data), nil
 }
 
 func (u *UIMService) GetGID2(ctx context.Context) (string, error) {
@@ -1389,7 +1389,7 @@ func (u *UIMService) GetGID2(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return simRawHex(data), nil
+	return simGIDHex(data), nil
 }
 
 func (u *UIMService) GetSIMServiceTable(ctx context.Context) (*SIMServiceTable, error) {
@@ -1542,6 +1542,11 @@ func (u *UIMService) readOPLRecords(ctx context.Context, fileID uint16) ([]OPLRe
 	return records, nil
 }
 
+// GetNativeMCCMNC resolves the subscription home PLMN.
+// EF-AD is authoritative for the two- or three-digit MNC width (see
+// getNativeMCCMNCFromIMSI). OPL/HPLMNwAcT records describe roaming
+// preferences and are not an authoritative home PLMN source, but are
+// used as a fallback here when EF-AD is unavailable.
 func (u *UIMService) GetNativeMCCMNC(ctx context.Context) (mcc string, mnc string, err error) {
 	if opl, oplErr := u.GetOPLRecords(ctx); oplErr == nil {
 		if mcc, mnc, ok := nativeMCCMNCFromOPLRecords(opl); ok {
@@ -1640,6 +1645,16 @@ func trimSPNPadding(data []byte) []byte {
 
 func simRawHex(data []byte) string {
 	data = trimSPNPadding(data)
+	if len(data) == 0 {
+		return ""
+	}
+	return strings.ToUpper(hex.EncodeToString(data))
+}
+
+// simGIDHex preserves the complete EF-GID value. Unlike text and TLV EFs,
+// 0xFF is a valid trailing byte in a carrier's GID selector (for example
+// 20:FF), so it must not be treated as generic SIM padding.
+func simGIDHex(data []byte) string {
 	if len(data) == 0 {
 		return ""
 	}
