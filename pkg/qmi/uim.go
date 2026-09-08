@@ -52,19 +52,32 @@ const (
 )
 
 const (
-	UIMSessionTypePrimaryGWProvisioning   uint8 = 0
-	UIMSessionTypePrimary1XProvisioning   uint8 = 1
-	UIMSessionTypeSecondaryGWProvisioning uint8 = 2
-	UIMSessionTypeSecondary1XProvisioning uint8 = 3
-	UIMSessionTypeNonProvisioningSlot1    uint8 = 4
-	UIMSessionTypeNonProvisioningSlot2    uint8 = 5
-	UIMSessionTypeCardSlot1               uint8 = 6
-	UIMSessionTypeCardSlot2               uint8 = 7
-	UIMSessionTypeLogicalChannelSlot1     uint8 = 8
-	UIMSessionTypeLogicalChannelSlot2     uint8 = 9
-	UIMSessionTypeNonProvisioningSlot3    uint8 = 16
-	UIMSessionTypeCardSlot3               uint8 = 19
-	UIMSessionTypeLogicalChannelSlot3     uint8 = 22
+	UIMSessionTypePrimaryGWProvisioning     uint8 = 0  // Primary GSM/WCDMA provisioning
+	UIMSessionTypePrimary1XProvisioning     uint8 = 1  // Primary CDMA1x provisioning
+	UIMSessionTypeSecondaryGWProvisioning   uint8 = 2  // Secondary GSM/WCDMA provisioning
+	UIMSessionTypeSecondary1XProvisioning   uint8 = 3  // Secondary CDMA1x provisioning
+	UIMSessionTypeNonProvisioningSlot1      uint8 = 4  // Nonprovisioning on slot 1
+	UIMSessionTypeNonProvisioningSlot2      uint8 = 5  // Nonprovisioning on slot 2
+	UIMSessionTypeCardSlot1                 uint8 = 6  // Card on slot 1
+	UIMSessionTypeCardSlot2                 uint8 = 7  // Card on slot 2
+	UIMSessionTypeLogicalChannelSlot1       uint8 = 8  // Logical channel on slot 1
+	UIMSessionTypeLogicalChannelSlot2       uint8 = 9  // Logical channel on slot 2
+	// Slots 4-5 (since libqmi 1.28)
+	UIMSessionTypeTertiaryGWProvisioning    uint8 = 10 // Tertiary GSM/WCDMA provisioning
+	UIMSessionTypeTertiary1XProvisioning    uint8 = 11 // Tertiary CDMA1x provisioning
+	UIMSessionTypeQuaternaryGWProvisioning  uint8 = 12 // Quaternary GSM/WCDMA provisioning
+	UIMSessionTypeQuaternary1XProvisioning  uint8 = 13 // Quaternary CDMA1x provisioning
+	UIMSessionTypeQuinaryGWProvisioning     uint8 = 14 // Quinary GSM/WCDMA provisioning
+	UIMSessionTypeQuinary1XProvisioning     uint8 = 15 // Quinary CDMA1x provisioning
+	UIMSessionTypeNonProvisioningSlot3      uint8 = 16 // Nonprovisioning on slot 3
+	UIMSessionTypeNonProvisioningSlot4      uint8 = 17 // Nonprovisioning on slot 4
+	UIMSessionTypeNonProvisioningSlot5      uint8 = 18 // Nonprovisioning on slot 5
+	UIMSessionTypeCardSlot3                 uint8 = 19 // Card on slot 3
+	UIMSessionTypeCardSlot4                 uint8 = 20 // Card on slot 4
+	UIMSessionTypeCardSlot5                 uint8 = 21 // Card on slot 5
+	UIMSessionTypeLogicalChannelSlot3       uint8 = 22 // Logical channel on slot 3
+	UIMSessionTypeLogicalChannelSlot4       uint8 = 23 // Logical channel on slot 4
+	UIMSessionTypeLogicalChannelSlot5       uint8 = 24 // Logical channel on slot 5
 )
 
 const (
