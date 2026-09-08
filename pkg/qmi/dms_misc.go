@@ -373,5 +373,48 @@ func parseDMSStoredImages(data []byte) []DMSStoredImage {
 	return images
 }
 
+// ============================================================================
+// DMS Activate Automatic / Activate Manual (CDMA activation)
+// ============================================================================
+
+const (
+	DMSActivateAutomatic uint16 = 0x0032
+	DMSActivateManual    uint16 = 0x0033
+)
+
+// ActivateAutomatic triggers automatic CDMA activation.
+// activationCode is the carrier-provided activation code string.
+func (d *DMSService) ActivateAutomatic(ctx context.Context, activationCode string) error {
+	codeTLV := NewTLVString(0x01, activationCode)
+	resp, err := d.client.SendRequest(ctx, ServiceDMS, d.clientID, DMSActivateAutomatic, []TLV{codeTLV})
+	if err != nil {
+		return fmt.Errorf("DMS ActivateAutomatic send failed: %w", err)
+	}
+	return resp.CheckResult()
+}
+
+// ActivateManual triggers manual CDMA activation with full provisioning info.
+// spc: 6-digit Service Programming Code
+// sid: System Identification Number
+// mdn: Mobile Directory Number (phone number)
+// min: Mobile Identification Number
+func (d *DMSService) ActivateManual(ctx context.Context, spc string, sid uint16, mdn, min string) error {
+	// TLV 0x01: Info (6-byte SPC + uint16 SID + string MDN + string MIN)
+	mdnBytes := []byte(mdn)
+	minBytes := []byte(min)
+	buf := make([]byte, 6+2+len(mdnBytes)+len(minBytes))
+	copy(buf[:6], []byte(spc))
+	binary.LittleEndian.PutUint16(buf[6:8], sid)
+	copy(buf[8:8+len(mdnBytes)], mdnBytes)
+	copy(buf[8+len(mdnBytes):], minBytes)
+
+	tlvs := []TLV{{Type: 0x01, Value: buf}}
+	resp, err := d.client.SendRequest(ctx, ServiceDMS, d.clientID, DMSActivateManual, tlvs)
+	if err != nil {
+		return fmt.Errorf("DMS ActivateManual send failed: %w", err)
+	}
+	return resp.CheckResult()
+}
+
 // Ensure strings import is used (for future use in description parsing)
 var _ = strings.TrimRight
