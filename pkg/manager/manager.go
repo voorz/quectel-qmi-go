@@ -179,6 +179,14 @@ type Manager struct {
 	coreReadySince    time.Time
 	desiredConnection bool
 
+	// dataConfigMu serializes data-config replacement with its disconnect/redial sequence.
+	dataConfigMu sync.Mutex
+	// dataOpMu serializes the actual dial/teardown operation with event-loop work.
+	dataOpMu sync.Mutex
+	// reconfiguringData suppresses automatic reconnect scheduling while a
+	// ReconfigureDataConfig call is mid-flight (between disconnect and redial).
+	reconfiguringData bool
+
 	// Event handling
 	// Event handling / 事件处理
 	ctx     context.Context

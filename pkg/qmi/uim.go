@@ -52,19 +52,32 @@ const (
 )
 
 const (
-	UIMSessionTypePrimaryGWProvisioning   uint8 = 0
-	UIMSessionTypePrimary1XProvisioning   uint8 = 1
-	UIMSessionTypeSecondaryGWProvisioning uint8 = 2
-	UIMSessionTypeSecondary1XProvisioning uint8 = 3
-	UIMSessionTypeNonProvisioningSlot1    uint8 = 4
-	UIMSessionTypeNonProvisioningSlot2    uint8 = 5
-	UIMSessionTypeCardSlot1               uint8 = 6
-	UIMSessionTypeCardSlot2               uint8 = 7
-	UIMSessionTypeLogicalChannelSlot1     uint8 = 8
-	UIMSessionTypeLogicalChannelSlot2     uint8 = 9
-	UIMSessionTypeNonProvisioningSlot3    uint8 = 16
-	UIMSessionTypeCardSlot3               uint8 = 19
-	UIMSessionTypeLogicalChannelSlot3     uint8 = 22
+	UIMSessionTypePrimaryGWProvisioning     uint8 = 0  // Primary GSM/WCDMA provisioning
+	UIMSessionTypePrimary1XProvisioning     uint8 = 1  // Primary CDMA1x provisioning
+	UIMSessionTypeSecondaryGWProvisioning   uint8 = 2  // Secondary GSM/WCDMA provisioning
+	UIMSessionTypeSecondary1XProvisioning   uint8 = 3  // Secondary CDMA1x provisioning
+	UIMSessionTypeNonProvisioningSlot1      uint8 = 4  // Nonprovisioning on slot 1
+	UIMSessionTypeNonProvisioningSlot2      uint8 = 5  // Nonprovisioning on slot 2
+	UIMSessionTypeCardSlot1                 uint8 = 6  // Card on slot 1
+	UIMSessionTypeCardSlot2                 uint8 = 7  // Card on slot 2
+	UIMSessionTypeLogicalChannelSlot1       uint8 = 8  // Logical channel on slot 1
+	UIMSessionTypeLogicalChannelSlot2       uint8 = 9  // Logical channel on slot 2
+	// Slots 4-5 (since libqmi 1.28)
+	UIMSessionTypeTertiaryGWProvisioning    uint8 = 10 // Tertiary GSM/WCDMA provisioning
+	UIMSessionTypeTertiary1XProvisioning    uint8 = 11 // Tertiary CDMA1x provisioning
+	UIMSessionTypeQuaternaryGWProvisioning  uint8 = 12 // Quaternary GSM/WCDMA provisioning
+	UIMSessionTypeQuaternary1XProvisioning  uint8 = 13 // Quaternary CDMA1x provisioning
+	UIMSessionTypeQuinaryGWProvisioning     uint8 = 14 // Quinary GSM/WCDMA provisioning
+	UIMSessionTypeQuinary1XProvisioning     uint8 = 15 // Quinary CDMA1x provisioning
+	UIMSessionTypeNonProvisioningSlot3      uint8 = 16 // Nonprovisioning on slot 3
+	UIMSessionTypeNonProvisioningSlot4      uint8 = 17 // Nonprovisioning on slot 4
+	UIMSessionTypeNonProvisioningSlot5      uint8 = 18 // Nonprovisioning on slot 5
+	UIMSessionTypeCardSlot3                 uint8 = 19 // Card on slot 3
+	UIMSessionTypeCardSlot4                 uint8 = 20 // Card on slot 4
+	UIMSessionTypeCardSlot5                 uint8 = 21 // Card on slot 5
+	UIMSessionTypeLogicalChannelSlot3       uint8 = 22 // Logical channel on slot 3
+	UIMSessionTypeLogicalChannelSlot4       uint8 = 23 // Logical channel on slot 4
+	UIMSessionTypeLogicalChannelSlot5       uint8 = 24 // Logical channel on slot 5
 )
 
 const (
@@ -316,21 +329,10 @@ func (u *UIMService) Close() error {
 }
 
 func (u *UIMService) GetCardStatusDetails(ctx context.Context) (*CardStatusDetails, SIMStatus, error) {
-	resp, err := u.client.SendRequest(ctx, ServiceUIM, u.clientID, UIMGetCardStatus, nil)
+	v, err := u.getCardStatusValue(ctx)
 	if err != nil {
 		return nil, SIMAbsent, err
 	}
-
-	if err := resp.CheckResult(); err != nil {
-		return nil, SIMAbsent, fmt.Errorf("UIM get card status failed: %w", err)
-	}
-
-	tlv := FindTLV(resp.TLVs, 0x10)
-	if tlv == nil || len(tlv.Value) < 15 {
-		return nil, SIMNotReady, fmt.Errorf("card status TLV missing or too short")
-	}
-
-	v := tlv.Value
 	details := &CardStatusDetails{}
 	details.NumSlot = v[8]
 	details.CardState = v[9]
@@ -466,18 +468,11 @@ func (u *UIMService) GetISIMAID(ctx context.Context) ([]byte, error) {
 }
 
 func (u *UIMService) getCardStatusAID(ctx context.Context, appType uint8, prefix []byte, label string) ([]byte, error) {
-	resp, err := u.client.SendRequest(ctx, ServiceUIM, u.clientID, UIMGetCardStatus, nil)
+	v, err := u.getCardStatusValue(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if err := resp.CheckResult(); err != nil {
-		return nil, fmt.Errorf("UIM get card status failed: %w", err)
-	}
-	tlv := FindTLV(resp.TLVs, 0x10)
-	if tlv == nil || len(tlv.Value) < 15 {
-		return nil, fmt.Errorf("card status TLV missing or too short")
-	}
-	apps := parseUIMCardStatusApps(tlv.Value, tlv.Value[14])
+	apps := parseUIMCardStatusApps(v, v[14])
 	for _, app := range apps {
 		if app.appType != appType {
 			continue
@@ -1381,7 +1376,7 @@ func (u *UIMService) GetGID1(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return simRawHex(data), nil
+	return simGIDHex(data), nil
 }
 
 func (u *UIMService) GetGID2(ctx context.Context) (string, error) {
@@ -1389,7 +1384,7 @@ func (u *UIMService) GetGID2(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return simRawHex(data), nil
+	return simGIDHex(data), nil
 }
 
 func (u *UIMService) GetSIMServiceTable(ctx context.Context) (*SIMServiceTable, error) {
@@ -1542,6 +1537,11 @@ func (u *UIMService) readOPLRecords(ctx context.Context, fileID uint16) ([]OPLRe
 	return records, nil
 }
 
+// GetNativeMCCMNC resolves the subscription home PLMN.
+// EF-AD is authoritative for the two- or three-digit MNC width (see
+// getNativeMCCMNCFromIMSI). OPL/HPLMNwAcT records describe roaming
+// preferences and are not an authoritative home PLMN source, but are
+// used as a fallback here when EF-AD is unavailable.
 func (u *UIMService) GetNativeMCCMNC(ctx context.Context) (mcc string, mnc string, err error) {
 	if opl, oplErr := u.GetOPLRecords(ctx); oplErr == nil {
 		if mcc, mnc, ok := nativeMCCMNCFromOPLRecords(opl); ok {
@@ -1640,6 +1640,16 @@ func trimSPNPadding(data []byte) []byte {
 
 func simRawHex(data []byte) string {
 	data = trimSPNPadding(data)
+	if len(data) == 0 {
+		return ""
+	}
+	return strings.ToUpper(hex.EncodeToString(data))
+}
+
+// simGIDHex preserves the complete EF-GID value. Unlike text and TLV EFs,
+// 0xFF is a valid trailing byte in a carrier's GID selector (for example
+// 20:FF), so it must not be treated as generic SIM padding.
+func simGIDHex(data []byte) string {
 	if len(data) == 0 {
 		return ""
 	}

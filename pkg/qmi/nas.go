@@ -312,6 +312,9 @@ type LTECellLocationInfo struct {
 	TAC                      uint16
 	GlobalCellID             uint32
 	EARFCN                   uint16
+	// HasEARFCN distinguishes a real band-1 EARFCN of zero from an omitted
+	// value in a manually assembled or incomplete response.
+	HasEARFCN                bool
 	ServingCellID            uint16
 	CellReselectionPriority  uint8
 	SNonIntraSearchThreshold uint8
@@ -422,14 +425,103 @@ func GetLTEDuplexModeFromCellLocation(info *CellLocationInfo) string {
 	if info == nil || info.LTE == nil {
 		return ""
 	}
-	return getLTEDuplexModeFromEARFCN(info.LTE.EARFCN)
+	if !info.LTE.HasEARFCN && info.LTE.EARFCN == 0 {
+		return ""
+	}
+	return GetLTEDuplexModeFromEARFCN(uint32(info.LTE.EARFCN))
+}
+
+// GetLTEDuplexModeFromEARFCN returns the E-UTRA duplex mode for a serving
+// downlink EARFCN. The value is intentionally empty when the frequency raster
+// is not one of the LTE bands known by this package; callers must not turn an
+// unknown channel into a guessed FDD/TDD claim.
+//
+// The ranges below are the 3GPP TS 36.101 E-UTRA channel-number ranges. The
+// QMI cell-location field is uint16, so the high-numbered bands that cannot be
+// represented there are still handled when another host boundary supplies a
+// uint32 EARFCN (for example MBIM).
+func GetLTEDuplexModeFromEARFCN(earfcn uint32) string {
+	for _, r := range lteEARFCNDuplexRanges {
+		if earfcn >= r.first && earfcn <= r.last {
+			return r.duplex
+		}
+	}
+	return ""
+}
+
+type lteEARFCNDuplexRange struct {
+	first  uint32
+	last   uint32
+	duplex string
+}
+
+// Keep this table ordered by EARFCN. Gaps are intentional: they are reserved
+// or belong to LTE bands whose raster is outside the uint16 QMI field.
+var lteEARFCNDuplexRanges = []lteEARFCNDuplexRange{
+	{0, 599, "FDD"},       // E-UTRA band 1
+	{600, 1199, "FDD"},    // band 2
+	{1200, 1949, "FDD"},   // band 3
+	{1950, 2399, "FDD"},   // band 4
+	{2400, 2649, "FDD"},   // band 5
+	{2650, 2749, "FDD"},   // band 6
+	{2750, 3449, "FDD"},   // band 7
+	{3450, 3799, "FDD"},   // band 8
+	{3800, 4149, "FDD"},   // band 9
+	{4150, 4749, "FDD"},   // band 10
+	{4750, 4949, "FDD"},   // band 11
+	{5010, 5179, "FDD"},   // band 12
+	{5180, 5279, "FDD"},   // band 13
+	{5280, 5379, "FDD"},   // band 14
+	{5730, 5849, "FDD"},   // band 17
+	{5850, 5999, "FDD"},   // band 18
+	{6000, 6149, "FDD"},   // band 19
+	{6150, 6449, "FDD"},   // band 20
+	{6450, 6599, "FDD"},   // band 21
+	{6600, 7399, "FDD"},   // band 22
+	{7500, 7699, "FDD"},   // band 23
+	{7700, 8039, "FDD"},   // band 24
+	{8040, 8689, "FDD"},   // band 25
+	{8690, 9039, "FDD"},   // band 26
+	{9040, 9209, "FDD"},   // band 27
+	{9210, 9659, "FDD"},   // band 28
+	{9660, 9769, "FDD"},   // band 29
+	{9770, 9869, "FDD"},   // band 30
+	{9870, 9919, "FDD"},   // band 31
+	{9920, 10359, "FDD"},  // band 32
+	{36000, 36199, "TDD"}, // band 33
+	{36200, 36349, "TDD"}, // band 34
+	{36350, 36949, "TDD"}, // band 35
+	{36950, 37549, "TDD"}, // band 36
+	{37550, 37749, "TDD"}, // band 37
+	{37750, 38249, "TDD"}, // band 38
+	{38250, 38649, "TDD"}, // band 39
+	{38650, 39649, "TDD"}, // band 40
+	{39650, 41589, "TDD"}, // band 41
+	{41590, 43589, "TDD"}, // band 42
+	{43590, 45589, "TDD"}, // band 43
+	{45590, 46589, "TDD"}, // band 44
+	{46590, 46789, "TDD"}, // band 45
+	{46790, 54539, "TDD"}, // band 46
+	{54540, 55239, "TDD"}, // band 47
+	{55240, 56739, "TDD"}, // band 48
+	{56740, 58239, "TDD"}, // band 49
+	{58240, 59089, "TDD"}, // band 50
+	{59090, 59139, "TDD"}, // band 51
+	{59140, 60139, "TDD"}, // band 52
+	{65536, 66435, "FDD"}, // band 65
+	{66436, 67335, "FDD"}, // band 66
+	{67336, 67535, "FDD"}, // band 67
+	{67536, 67835, "FDD"}, // band 68
+	{67836, 68335, "FDD"}, // band 69
+	{68336, 68585, "FDD"}, // band 70
+	{68586, 68935, "FDD"}, // band 71
 }
 
 func getLTEDuplexModeFromBand(band uint16) string {
 	switch band {
-	case 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 46, 47, 48, 50, 51, 53:
+	case 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53:
 		return "TDD"
-	case 1, 2, 3, 4, 5, 7, 8, 12, 13, 14, 17, 18, 19, 20, 25, 26, 27, 28, 30, 31, 65, 66, 67, 68, 70, 71:
+	case 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 65, 66, 67, 68, 69, 70, 71:
 		return "FDD"
 	default:
 		return ""
@@ -437,32 +529,7 @@ func getLTEDuplexModeFromBand(band uint16) string {
 }
 
 func getLTEDuplexModeFromEARFCN(earfcn uint16) string {
-	switch {
-	case earfcn <= 599:
-		return getLTEDuplexModeFromBand(1)
-	case earfcn >= 600 && earfcn <= 1199:
-		return getLTEDuplexModeFromBand(2)
-	case earfcn >= 1200 && earfcn <= 1949:
-		return getLTEDuplexModeFromBand(3)
-	case earfcn >= 1950 && earfcn <= 2399:
-		return getLTEDuplexModeFromBand(4)
-	case earfcn >= 2400 && earfcn <= 2649:
-		return getLTEDuplexModeFromBand(5)
-	case earfcn >= 2750 && earfcn <= 3449:
-		return getLTEDuplexModeFromBand(7)
-	case earfcn >= 3450 && earfcn <= 3799:
-		return getLTEDuplexModeFromBand(8)
-	case earfcn >= 37750 && earfcn <= 38249:
-		return getLTEDuplexModeFromBand(38)
-	case earfcn >= 38250 && earfcn <= 38649:
-		return getLTEDuplexModeFromBand(39)
-	case earfcn >= 38650 && earfcn <= 39649:
-		return getLTEDuplexModeFromBand(40)
-	case earfcn >= 39650 && earfcn <= 41589:
-		return getLTEDuplexModeFromBand(41)
-	default:
-		return ""
-	}
+	return GetLTEDuplexModeFromEARFCN(uint32(earfcn))
 }
 
 // NetworkTime is one network time source returned by NAS.
@@ -1560,6 +1627,7 @@ func parseCellLocationInfoPacket(resp *Packet, checkResult bool) (*CellLocationI
 			TAC:                      binary.LittleEndian.Uint16(tlv.Value[4:6]),
 			GlobalCellID:             binary.LittleEndian.Uint32(tlv.Value[6:10]),
 			EARFCN:                   binary.LittleEndian.Uint16(tlv.Value[10:12]),
+			HasEARFCN:                true,
 			ServingCellID:            binary.LittleEndian.Uint16(tlv.Value[12:14]),
 			CellReselectionPriority:  tlv.Value[14],
 			SNonIntraSearchThreshold: tlv.Value[15],
