@@ -870,6 +870,9 @@ func (c *Client) dispatchIndication(p *Packet) {
 		eventType = EventUnknown
 	}
 
+	// Dispatch to per-service handler (e.g., PDC async indication matching)
+	c.dispatchToServiceHandler(p)
+
 	event := Event{
 		Type:      eventType,
 		ServiceID: p.ServiceType,

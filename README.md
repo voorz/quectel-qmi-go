@@ -18,16 +18,21 @@
 
 | Service | 能力概览 |
 | --- | --- |
-| `DMS` | 设备信息、序列号、运行模式、PIN、ICCID/IMSI、Band/能力、MAC、用户数据 |
-| `NAS` | 驻网状态、信号、系统信息、搜网、制式偏好、系统选择偏好、小区、网络时间 |
-| `WDS` | 拨号/断开、runtime settings、profile 管理、流量统计、bearer、autoconnect |
+| `DMS` | 设备信息、序列号、运行模式、PIN、ICCID/IMSI、Band/能力、MAC、用户数据、事件上报、CK 锁卡、固件偏好、CDMA 激活、恢复出厂 |
+| `NAS` | 驻网状态、信号、系统信息、搜网、制式偏好、系统选择偏好、小区、网络时间、细粒度信号阈值事件 |
+| `WDS` | 拨号/断开、runtime settings、profile 管理、流量统计、bearer、autoconnect、LTE 附着参数/PDN 列表 |
 | `WDA` | Raw-IP / 数据格式配置 |
-| `UIM` | 卡状态、PIN、透明文件/record 读取、逻辑通道、APDU、slot 状态与切换 |
+| `UIM` | 卡状态、PIN、透明文件/record 读取、逻辑通道、APDU、slot 状态与切换、多槽就绪、配置查询、去个性化、写入记录 |
 | `WMS` | 短信发送、读取、列举、删除、路由、ACK、存储后发送、短信事件 |
 | `IMS` | IMS 服务开关读取/设置、绑定 |
 | `IMSA` | IMS 注册状态、IMS 服务状态、状态变更 indication |
 | `IMSP` | IMS enabler 状态查询 |
 | `VOICE` | 拨号、接听、挂断、DTMF、USSD、补充业务、通话状态 indication |
+| `DSD` | 数据系统域状态检测、WiFi↔Cellular 切换感知、APN 信息查询 |
+| `PDC` | 运营商持久配置管理（加载/激活/删除/列表）、频段锁定、异步指示驱动 |
+| `LOC` | GPS/GNSS 定位（E911）、位置上报、NMEA indication、A-GPS 辅助数据注入、操作模式控制 |
+| `SAR` | 射频吸收率合规控制（RF 状态查询与设置） |
+| `OMA-DM` | 远程设备管理（DM 会话管理、特性设置、事件上报） |
 
 ### `manager` 层额外提供
 
@@ -42,9 +47,11 @@
 
 ## 当前边界
 
-- 当前 transport 以 `/dev/cdc-wdm*` + QMUX 为主
-- `IMSDCM` 还不支持
-  原因：它依赖 `16-bit service id` / `QRTR` 路径，不是补一个普通 wrapper 就能解决
+- 当前 transport 同时支持 `/dev/cdc-wdm*` + QMUX 和原生 QRTR（`AF_QIPCRTR`）socket
+- QRTR transport 已实现 Phase 1a：本地模拟 CTL 消息，所有 ≤0xFF 的 service 均可用
+- `IMSDCM` (service ID `0x302`) 暂不支持
+  原因：当前 QMUX 头使用 8-bit ServiceType，IMSDCM 需要 Phase 1b 升级到 16-bit service-aware 虚拟头
+- 已覆盖 libqmi 的主要 Service（DMS/NAS/WDS/WDA/UIM/WMS/IMS/IMSA/IMSP/VOICE/DSD/PDC/LOC/SAR/OMA-DM），但仍非全量覆盖
 - 当前更适合 Linux 宿主机或容器内的模组管理进程，不是桌面 GUI 工具
 
 ## 目录结构
@@ -56,6 +63,7 @@ quectel-qmi-go/
 │   ├── dms-tool/   # DMS 调试
 │   ├── info-tool/  # 信息查询
 │   ├── nas-tool/   # NAS 调试
+│   ├── qrtr-test/  # QRTR transport 测试
 │   ├── sms-tool/   # 短信调试
 │   ├── wda-tool/   # WDA 调试
 │   └── wds-tool/   # WDS 调试
@@ -280,13 +288,14 @@ mgr.OnVoiceUSSD(func(info *qmi.VoiceUSSDIndication) {
 
 仓库内置了一组轻量 CLI，方便联调协议层：
 
-- `cmd/cm`
-- `cmd/dms-tool`
-- `cmd/info-tool`
-- `cmd/nas-tool`
-- `cmd/sms-tool`
-- `cmd/wda-tool`
-- `cmd/wds-tool`
+- `cmd/cm` — 主连接管理
+- `cmd/dms-tool` — DMS 调试
+- `cmd/info-tool` — 信息查询
+- `cmd/nas-tool` — NAS 调试
+- `cmd/sms-tool` — 短信调试
+- `cmd/wda-tool` — WDA 调试
+- `cmd/wds-tool` — WDS 调试
+- `cmd/qrtr-test` — QRTR transport 连接测试
 
 如果你要把某个 service 接进上层业务，通常可以先用这些小工具确认模组返回，再写正式集成代码。
 
@@ -296,12 +305,18 @@ mgr.OnVoiceUSSD(func(info *qmi.VoiceUSSDIndication) {
 - QMI 短信网关
 - 语音/USSD 控制面集成
 - 需要直接读 SIM/UIM 文件的服务
+- 运营商锁卡管理与解锁
+- 多卡槽 SIM 身份读取与热插拔事件
+- GPS/GNSS 定位（E911 合规）
+- 射频吸收率（SAR）合规控制
+- 远程设备管理（OMA-DM）
+- 数据系统域状态感知（WiFi↔Cellular 切换）
 
 ## 不适合的场景
 
-- 依赖 `QRTR`/`IMSDCM` 的深度 IMS bearer 管理
+- 依赖 `IMSDCM` 的深度 IMS bearer 管理（需 Phase 1b 16-bit service 头升级）
 - 非 Linux 平台
-- 期望完全覆盖 `libqmi` 全部 service 的场景
+- 期望 100% 覆盖 `libqmi` 全部 service 的场景（`IMSDCM` service ID 超出 8-bit 范围，待 Phase 1b）
 - 只想临时执行几个一次性命令而不想引入代码集成
 
 ## 开发说明
