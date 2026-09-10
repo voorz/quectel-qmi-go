@@ -1,11 +1,69 @@
 package manager
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/voorz/quectel-qmi-go/pkg/qmi"
 )
+
+// ErrUIMCardAbsent indicates that the UIM slot has no card present.
+// OpenLogicalChannel and similar APDU operations will fail with QMIErrInternal (0x0003)
+// when the card is absent; rebind+retry cannot fix this condition.
+var ErrUIMCardAbsent = errors.New("uim: card absent")
+
+// isCardAbsentForSlot checks whether the card in the given slot is physically absent.
+// It performs a direct GetSlotStatus call (bypassing recovery) to avoid rebind loops.
+// Returns true only when slot status is successfully retrieved and the card is confirmed absent.
+func (m *Manager) isCardAbsentForSlot(slot uint8) bool {
+	if m == nil {
+		return false
+	}
+	// Use a short timeout to avoid blocking the caller when UIM is unresponsive.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// Read the current UIM service pointer without going through ensureUIMService
+	// to avoid re-entrant locking on uimRecoveryMu.
+	m.mu.RLock()
+	uim := m.uim
+	m.mu.RUnlock()
+	if uim == nil {
+		return false
+	}
+
+	info, err := uim.GetSlotStatus(ctx)
+	if err != nil || info == nil {
+		return false
+	}
+
+	for _, s := range info.Slots {
+		if s.LogicalSlot == slot || (slot == 0 && s.LogicalSlot == 0) {
+			return s.PhysicalCardStatus == qmi.UIMPhysicalCardStateAbsent
+		}
+	}
+	// If exact slot not found, check if ALL slots are absent (single-slot modems).
+	if len(info.Slots) > 0 {
+		allAbsent := true
+		for _, s := range info.Slots {
+			if s.PhysicalCardStatus != qmi.UIMPhysicalCardStateAbsent {
+				allAbsent = false
+				break
+			}
+		}
+		return allAbsent
+	}
+	return false
+}
+
+// IsCardAbsent checks whether the card in the given slot is physically absent.
+// It is a public wrapper around isCardAbsentForSlot for use by external callers
+// (e.g. the eSIM manager needs to skip AID scans when no card is inserted).
+func (m *Manager) IsCardAbsent(slot uint8) bool {
+	return m.isCardAbsentForSlot(slot)
+}
 
 func (m *Manager) withUIMRecovery(op string, fn func(uim *qmi.UIMService) error) error {
 	_, err := withUIMRecoveryValue(m, op, func(uim *qmi.UIMService) (struct{}, error) {
@@ -166,6 +224,18 @@ func (m *Manager) rebindUIMService(reason string) (*qmi.UIMService, error) {
 }
 
 func (m *Manager) shouldRecoverUIMError(op string, err error) bool {
+	// Any UIM operation returning QMIErrInternal (0x0003) when the card is
+	// physically absent cannot be fixed by rebind+retry. Check slot status
+	// first; if the card is confirmed absent, skip recovery entirely to
+	// avoid infinite rebind loops (log spam).
+	if qe := qmi.GetQMIError(err); qe != nil && qe.ErrorCode == qmi.QMIErrInternal {
+		if m.isCardAbsentForSlot(0) {
+			m.log.WithField("service_name", "UIM").WithField("op", op).
+				WithField("error_code", fmt.Sprintf("0x%04x", qe.ErrorCode)).
+				Warn("UIM operation failed with card absent; skipping rebind+retry")
+			return false
+		}
+	}
 	return m.shouldRecoverServiceOperationError("UIM", op, err, "uim service not available")
 }
 
