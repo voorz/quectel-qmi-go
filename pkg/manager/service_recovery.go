@@ -32,7 +32,12 @@ func shouldRecoverServiceError(service string, err error, serviceUnavailableText
 
 	if qe := qmi.GetQMIError(err); qe != nil {
 		switch qe.ErrorCode {
-		case qmi.QMIErrInternal, qmi.QMIErrInvalidID, qmi.QMIErrDeviceNotReady, qmi.QMIErrClientIDsExhausted:
+		// QMIErrInternal(0x0003) 已从恢复列表中移除：
+		// OpenLogicalChannel 对不支持的 AID 返回 0x0003 是正常行为，
+		// 无差别 rebind 会破坏正常工作的 UIM session，导致 eSIM 扫描和 VoWiFi 互相干扰。
+		// 切卡后的 UIM session 失效由 modem reset 机制 (doRecoverFromModemReset) 处理。
+		// case qmi.QMIErrInternal,
+		case qmi.QMIErrInvalidID, qmi.QMIErrDeviceNotReady, qmi.QMIErrClientIDsExhausted:
 			return true
 		}
 		if qe.Service == qmi.ServiceControl && qe.MessageID == qmi.CTLGetClientID {
