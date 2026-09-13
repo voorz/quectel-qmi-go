@@ -46,9 +46,9 @@ const (
 type OMASessionType uint8
 
 const (
-	OMASessionTypeClientInitiatedDevConfig OMASessionType = 0
-	OMASessionTypeClientInitiatedDevProv   OMASessionType = 1
-	OMASessionTypeClientInitiatedPRLUpdate OMASessionType = 2
+	OMASessionTypeClientInitiatedDevConfig  OMASessionType = 0
+	OMASessionTypeClientInitiatedDevProv    OMASessionType = 1
+	OMASessionTypeClientInitiatedPRLUpdate  OMASessionType = 2
 	OMASessionTypeNetworkInitiatedDevConfig OMASessionType = 3
 	OMASessionTypeNetworkInitiatedDevProv   OMASessionType = 4
 	OMASessionTypeNetworkInitiatedPRLUpdate OMASessionType = 5
@@ -81,11 +81,11 @@ func (s OMASessionState) String() string {
 
 // OMASessionInfo contains the result of GetSessionInfo.
 type OMASessionInfo struct {
-	State    OMASessionState
-	Type     OMASessionType
-	FailReason uint8
-	RetryCount uint8
-	RetryPauseTimer uint16
+	State                    OMASessionState
+	Type                     OMASessionType
+	FailReason               uint8
+	RetryCount               uint8
+	RetryPauseTimer          uint16
 	RetryPauseTimerRemaining uint16
 }
 

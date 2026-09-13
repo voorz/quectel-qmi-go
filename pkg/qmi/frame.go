@@ -95,7 +95,7 @@ const (
 	NASConfigSignalInfoV2        uint16 = 0x006C // QMINAS_CONFIG_SIGNAL_INFO_V2_REQ
 	NASNetworkRejectInd          uint16 = 0x0068 // QMINAS_NETWORK_REJECT_IND
 	NASGetNetworkTime            uint16 = 0x007D // QMINAS_GET_NETWORK_TIME_REQ
- NASIncrementalNetworkScan    uint16 = 0x0085 // QMINAS_INCREMENTAL_NETWORK_SCAN_REQ
+	NASIncrementalNetworkScan    uint16 = 0x0085 // QMINAS_INCREMENTAL_NETWORK_SCAN_REQ
 	NASIncrementalNetworkScanInd uint16 = 0x0085 // QMINAS_INCREMENTAL_NETWORK_SCAN_IND
 	NASGetTxRxInfo               uint16 = 0x005A // QMINAS_GET_TX_RX_INFO_REQ
 	NASGetLTECphyCAInfo          uint16 = 0x00AC // QMINAS_GET_LTE_CPHY_CA_INFO_REQ

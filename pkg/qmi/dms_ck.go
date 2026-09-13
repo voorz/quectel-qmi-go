@@ -19,24 +19,24 @@ import (
 // ============================================================================
 
 const (
-	DMSUIMGetCKStatus      uint16 = 0x0040
-	DMSUIMSetCKProtection  uint16 = 0x0041
-	DMSUIMUnblockCK         uint16 = 0x0042
+	DMSUIMGetCKStatus     uint16 = 0x0040
+	DMSUIMSetCKProtection uint16 = 0x0041
+	DMSUIMUnblockCK       uint16 = 0x0042
 )
 
 // UIMFacility identifies which facility (lock) to operate on.
 type UIMFacility uint8
 
 const (
-	UIMFacilityNetworkPerso     UIMFacility = 0  // Network personalization (NCK)
-	UIMFacilityNetworkSubsetPerso UIMFacility = 1  // Network subset (NSCK)
-	UIMFacilityServiceProvider   UIMFacility = 2  // Service provider (SPCK)
-	UIMFacilityCorporate         UIMFacility = 3  // Corporate (CCK)
-	UIMFacilityPuk1              UIMFacility = 4  // PUK1
-	UIMFacNetworkPuk             UIMFacility = 5  // PUK for network
-	UIMFacNetworkSubsetPuk       UIMFacility = 6  // PUK for network subset
-	UIMFacServiceProviderPuk     UIMFacility = 7  // PUK for service provider
-	UIMFacCorporatePuk           UIMFacility = 8  // PUK for corporate
+	UIMFacilityNetworkPerso       UIMFacility = 0 // Network personalization (NCK)
+	UIMFacilityNetworkSubsetPerso UIMFacility = 1 // Network subset (NSCK)
+	UIMFacilityServiceProvider    UIMFacility = 2 // Service provider (SPCK)
+	UIMFacilityCorporate          UIMFacility = 3 // Corporate (CCK)
+	UIMFacilityPuk1               UIMFacility = 4 // PUK1
+	UIMFacNetworkPuk              UIMFacility = 5 // PUK for network
+	UIMFacNetworkSubsetPuk        UIMFacility = 6 // PUK for network subset
+	UIMFacServiceProviderPuk      UIMFacility = 7 // PUK for service provider
+	UIMFacCorporatePuk            UIMFacility = 8 // PUK for corporate
 )
 
 func (f UIMFacility) String() string {
@@ -89,8 +89,8 @@ func (s UIMFacilityState) String() string {
 
 // CKStatus holds the result of GetCKStatus.
 type CKStatus struct {
-	Facility          UIMFacility
-	State             UIMFacilityState
+	Facility           UIMFacility
+	State              UIMFacilityState
 	VerifyRetriesLeft  uint8
 	UnblockRetriesLeft uint8
 	OperationBlocking  bool // TLV 0x10: true if this facility is blocking operations

@@ -10,23 +10,23 @@ import (
 )
 
 var (
-	ErrPDNMuxConflict      = errors.New("qmi manager: PDN mux conflict")
-	ErrStalePDNSession     = errors.New("qmi manager: stale PDN session")
-	ErrPDNTopologyNotReady = errors.New("qmi manager: QMAP topology is not ready")
-	ErrPDNStart            = errors.New("qmi manager: start PDN network")
+	ErrPDNMuxConflict              = errors.New("qmi manager: PDN mux conflict")
+	ErrStalePDNSession             = errors.New("qmi manager: stale PDN session")
+	ErrPDNTopologyNotReady         = errors.New("qmi manager: QMAP topology is not ready")
+	ErrPDNStart                    = errors.New("qmi manager: start PDN network")
 	ErrRotateBlockedBySecondaryPDN = errors.New("qmi manager: IP rotation requires a radio reset, blocked by an active secondary PDN")
-	ErrManagerStopping     = errors.New("qmi manager: manager is stopping")
+	ErrManagerStopping             = errors.New("qmi manager: manager is stopping")
 )
 
 type PDNRequest struct {
-	APN          string
-	MuxID        uint8
-	IPFamily     uint8
-	ProfileIndex uint8
-	CallType     *uint8
-	EndpointType uint32
-	InterfaceID  uint32
-	ClientType  uint32
+	APN           string
+	MuxID         uint8
+	IPFamily      uint8
+	ProfileIndex  uint8
+	CallType      *uint8
+	EndpointType  uint32
+	InterfaceID   uint32
+	ClientType    uint32
 	UserspaceOnly bool
 }
 

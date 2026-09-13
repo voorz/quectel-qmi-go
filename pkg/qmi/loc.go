@@ -60,7 +60,7 @@ const (
 	LOCInjectPredictedOrbitsData  uint16 = 0x0035
 	LOCGetPredictedOrbitsSource   uint16 = 0x0036
 	LOCGetPredictedOrbitsValidity uint16 = 0x0037
-	LOCInjectUTCTime             uint16 = 0x0038
+	LOCInjectUTCTime              uint16 = 0x0038
 	LOCInjectPosition             uint16 = 0x0039
 	LOCSetEngineLock              uint16 = 0x003A
 	LOCGetEngineLock              uint16 = 0x003B
@@ -82,11 +82,11 @@ const (
 type LOCEventRegistrationFlag uint64
 
 const (
-	LOCEvtPositionReport           LOCEventRegistrationFlag = 1 << 0
-	LOCEvtNMEA                     LOCEventRegistrationFlag = 1 << 1
-	LOCEvtInjectPositionReq        LOCEventRegistrationFlag = 1 << 2
-	LOCEvtEngineState              LOCEventRegistrationFlag = 1 << 3
-	LOCEvtFixSessionStatus         LOCEventRegistrationFlag = 1 << 4
+	LOCEvtPositionReport    LOCEventRegistrationFlag = 1 << 0
+	LOCEvtNMEA              LOCEventRegistrationFlag = 1 << 1
+	LOCEvtInjectPositionReq LOCEventRegistrationFlag = 1 << 2
+	LOCEvtEngineState       LOCEventRegistrationFlag = 1 << 3
+	LOCEvtFixSessionStatus  LOCEventRegistrationFlag = 1 << 4
 )
 
 // LOCFixRecurrenceType controls how often fixes are requested.
@@ -94,18 +94,18 @@ type LOCFixRecurrenceType uint32
 
 const (
 	LOCFixRecurrenceRequestMultiple LOCFixRecurrenceType = 0
-	LOCFixRecurrenceRequestOnDemand  LOCFixRecurrenceType = 1
+	LOCFixRecurrenceRequestOnDemand LOCFixRecurrenceType = 1
 )
 
 // LOCSessionStatus represents the status of a positioning session.
 type LOCSessionStatus uint32
 
 const (
-	LOCSessionSuccess        LOCSessionStatus = 0
-	LOCSessionGeneralFailure LOCSessionStatus = 1
+	LOCSessionSuccess         LOCSessionStatus = 0
+	LOCSessionGeneralFailure  LOCSessionStatus = 1
 	LOCSessionInsufficientSVs LOCSessionStatus = 2
-	LOCSessionPhoneOff       LOCSessionStatus = 3
-	LOCSessionUserEnd        LOCSessionStatus = 4
+	LOCSessionPhoneOff        LOCSessionStatus = 3
+	LOCSessionUserEnd         LOCSessionStatus = 4
 )
 
 func (s LOCSessionStatus) String() string {
@@ -129,18 +129,18 @@ func (s LOCSessionStatus) String() string {
 type LOCEngineLockType uint32
 
 const (
-	LOCEngineLockNone   LOCEngineLockType = 0
-	LOCEngineLockTime   LOCEngineLockType = 1
-	LOCEngineLockGPS    LOCEngineLockType = 2
+	LOCEngineLockNone LOCEngineLockType = 0
+	LOCEngineLockTime LOCEngineLockType = 1
+	LOCEngineLockGPS  LOCEngineLockType = 2
 )
 
 // LOCOperationMode controls the GPS operation mode.
 type LOCOperationMode uint32
 
 const (
-	LOCOpModeStandalone   LOCOperationMode = 0
-	LOCOpModeMSBased      LOCOperationMode = 1
-	LOCOpModeMSAssisted   LOCOperationMode = 2
+	LOCOpModeStandalone LOCOperationMode = 0
+	LOCOpModeMSBased    LOCOperationMode = 1
+	LOCOpModeMSAssisted LOCOperationMode = 2
 )
 
 func (m LOCOperationMode) String() string {
@@ -158,19 +158,19 @@ func (m LOCOperationMode) String() string {
 
 // LOCPositionReport contains a parsed position report indication.
 type LOCPositionReport struct {
-	SessionStatus        LOCSessionStatus
-	SessionID            uint8
-	Latitude            float64 // degrees
-	Longitude           float64 // degrees
-	HorizUncertaintyCirc float32 // meters
-	HorizSpeed          float32 // m/s
+	SessionStatus         LOCSessionStatus
+	SessionID             uint8
+	Latitude              float64 // degrees
+	Longitude             float64 // degrees
+	HorizUncertaintyCirc  float32 // meters
+	HorizSpeed            float32 // m/s
 	AltitudeFromEllipsoid float32 // meters
-	VerticalUncertainty float32 // meters
-	Heading             float32 // degrees
-	UTCTimestamp        uint64 // milliseconds since Jan 6 1980
-	LeapSeconds        uint8
-	TimeUncertainty     float32
-	AltitudeAssumed     bool
+	VerticalUncertainty   float32 // meters
+	Heading               float32 // degrees
+	UTCTimestamp          uint64  // milliseconds since Jan 6 1980
+	LeapSeconds           uint8
+	TimeUncertainty       float32
+	AltitudeAssumed       bool
 }
 
 // LOCNMEAReport contains a parsed NMEA indication.
@@ -210,9 +210,9 @@ func NewLOCServiceWithContext(ctx context.Context, client *Client) (*LOCService,
 		return nil, err
 	}
 	svc := &LOCService{
-		client:  client,
+		client:   client,
 		clientID: clientID,
-		waiters: make(map[uint32]chan *locIndication),
+		waiters:  make(map[uint32]chan *locIndication),
 	}
 	client.RegisterServiceIndicationHandler(ServiceLOC, svc.handleIndication)
 	return svc, nil

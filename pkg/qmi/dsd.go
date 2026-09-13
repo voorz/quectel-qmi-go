@@ -32,8 +32,8 @@ const (
 	DSDGetSystemStatus    uint16 = 0x0024
 	DSDSystemStatusChange uint16 = 0x0025
 	DSDSystemStatusInd    uint16 = 0x0026
-	DSDGetAPNInfo          uint16 = 0x0033
-	DSDSetAPNType          uint16 = 0x0051
+	DSDGetAPNInfo         uint16 = 0x0033
+	DSDSetAPNType         uint16 = 0x0051
 )
 
 // ----------------------------------------------------------------------------
@@ -44,9 +44,9 @@ const (
 type DSDNetworkType uint32
 
 const (
-	DSDNetworkUnknown   DSDNetworkType = 0
-	DSDNetwork3GPP      DSDNetworkType = 1 // UMTS/LTE/NR
-	DSDNetwork3GPP2     DSDNetworkType = 2 // CDMA/EvDO
+	DSDNetworkUnknown DSDNetworkType = 0
+	DSDNetwork3GPP    DSDNetworkType = 1 // UMTS/LTE/NR
+	DSDNetwork3GPP2   DSDNetworkType = 2 // CDMA/EvDO
 )
 
 func (t DSDNetworkType) String() string {

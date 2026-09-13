@@ -306,12 +306,12 @@ type LTECellInterFrequency struct {
 
 // LTECellLocationInfo contains serving LTE cell fields.
 type LTECellLocationInfo struct {
-	UEInIdle                 bool
-	MCC                      string
-	MNC                      string
-	TAC                      uint16
-	GlobalCellID             uint32
-	EARFCN                   uint16
+	UEInIdle     bool
+	MCC          string
+	MNC          string
+	TAC          uint16
+	GlobalCellID uint32
+	EARFCN       uint16
 	// HasEARFCN distinguishes a real band-1 EARFCN of zero from an omitted
 	// value in a manually assembled or incomplete response.
 	HasEARFCN                bool

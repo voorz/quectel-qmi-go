@@ -196,10 +196,10 @@ type Manager struct {
 	events  *EventEmitter // External event callbacks / 外部事件回调
 
 	// Reconnection / 重连相关
-	retryCount   int
-	retryDelays  []time.Duration
-	reinitDelays []time.Duration
-	isRotating   bool // Flag to suppress status checks during IP rotation / 标志位: IP轮换期间抑制状态检查
+	retryCount         int
+	retryDelays        []time.Duration
+	reinitDelays       []time.Duration
+	isRotating         bool // Flag to suppress status checks during IP rotation / 标志位: IP轮换期间抑制状态检查
 	recoverCount       int
 	recoverFirstFailAt time.Time // 本轮连续恢复失败的首次时间，用于 MaxRecoverElapsed 判据
 	lastIPCheck        time.Time
@@ -209,7 +209,7 @@ type Manager struct {
 
 	// 多路拨号 (QMAP) / Multi-PDN
 	masterIface string // 物理网卡名 (QMAP master)
-	muxIface   string // QMAP 绑定后的虚拟网卡名 (如 qmimux0)
+	muxIface    string // QMAP 绑定后的虚拟网卡名 (如 qmimux0)
 
 	timerMu                 sync.Mutex
 	scheduledTimers         map[*time.Timer]struct{}
@@ -237,15 +237,15 @@ type Manager struct {
 	serviceTimeoutMu        sync.Mutex
 	serviceTimeoutFailures  map[serviceTimeoutKey]serviceTimeoutWindow
 
-	globalTimeoutMu         sync.Mutex
-	globalTimeoutServices   map[string]time.Time
-	globalTimeoutStormAt    time.Time
+	globalTimeoutMu       sync.Mutex
+	globalTimeoutServices map[string]time.Time
+	globalTimeoutStormAt  time.Time
 
 	// Data-plane topology / 数据面拓扑
-	dataPlane                   dataPlaneController
-	dataPlaneOps                dataPlaneOps
-	pdnOps                      pdnOps
-	netcfgOps                   netcfgOps
+	dataPlane                    dataPlaneController
+	dataPlaneOps                 dataPlaneOps
+	pdnOps                       pdnOps
+	netcfgOps                    netcfgOps
 	connectedDataPlaneGeneration uint64
 
 	// imsProbeSlot serializes temporary IMS WDS calls without serializing
@@ -2356,7 +2356,7 @@ func (m *Manager) setState(s State) {
 }
 
 type startupServiceTask struct {
-	run  func(context.Context) error
+	run func(context.Context) error
 }
 
 func (m *Manager) runStartupServiceTasks(ctx context.Context, fatal bool, tasks []startupServiceTask) error {

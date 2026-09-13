@@ -26,16 +26,16 @@ import (
 // ============================================================================
 
 const (
-	DMSResetService         uint16 = 0x0000
-	DMSReadERIFile          uint16 = 0x0039
+	DMSResetService           uint16 = 0x0000
+	DMSReadERIFile            uint16 = 0x0039
 	DMSRestoreFactoryDefaults uint16 = 0x003A
-	DMSValidateSPC           uint16 = 0x003B
-	DMSSetFirmwareID        uint16 = 0x003E
-	DMSGetFirmwarePreference uint16 = 0x0047
-	DMSSetFirmwarePreference uint16 = 0x0048
-	DMSListStoredImages      uint16 = 0x0049
-	DMSDeleteStoredImage     uint16 = 0x004A
-	DMSGetStoredImageInfo    uint16 = 0x004C
+	DMSValidateSPC            uint16 = 0x003B
+	DMSSetFirmwareID          uint16 = 0x003E
+	DMSGetFirmwarePreference  uint16 = 0x0047
+	DMSSetFirmwarePreference  uint16 = 0x0048
+	DMSListStoredImages       uint16 = 0x0049
+	DMSDeleteStoredImage      uint16 = 0x004A
+	DMSGetStoredImageInfo     uint16 = 0x004C
 )
 
 // ----------------------------------------------------------------------------
@@ -46,7 +46,7 @@ const (
 type DMSFirmwareImageType uint8
 
 const (
-	DMSFirmwareImageTypeModem   DMSFirmwareImageType = 0
+	DMSFirmwareImageTypeModem  DMSFirmwareImageType = 0
 	DMSFirmwareImageTypeModem2 DMSFirmwareImageType = 1
 )
 

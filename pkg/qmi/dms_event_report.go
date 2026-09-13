@@ -25,11 +25,11 @@ const DMSSetEventReport uint16 = 0x0001
 // DMSEventReportConfig specifies which DMS events to register for.
 // A nil/false field means "do not register for that event".
 type DMSEventReportConfig struct {
-	PowerStateReporting       bool // TLV 0x10: power state change notifications
-	PINStateReporting         bool // TLV 0x12: PIN1/PIN2 state change notifications
-	OperatingModeReporting    bool // TLV 0x14: operating mode change notifications
-	UIMStateReporting         bool // TLV 0x15: UIM state change notifications
-	WirelessDisableReporting  bool // TLV 0x16: wireless disable state notifications
+	PowerStateReporting      bool // TLV 0x10: power state change notifications
+	PINStateReporting        bool // TLV 0x12: PIN1/PIN2 state change notifications
+	OperatingModeReporting   bool // TLV 0x14: operating mode change notifications
+	UIMStateReporting        bool // TLV 0x15: UIM state change notifications
+	WirelessDisableReporting bool // TLV 0x16: wireless disable state notifications
 }
 
 // SetEventReport registers for DMS event indications.
@@ -80,7 +80,7 @@ func (d *DMSService) SetEventReport(ctx context.Context, cfg DMSEventReportConfi
 // DMSPowerState carries the power state from a DMS Event Report indication.
 type DMSPowerState struct {
 	PowerStateFlags uint8 // Bitfield: bit 0 = AC power, bit 1 = battery powered, etc.
-	BatteryLevel   uint8 // 0-100
+	BatteryLevel    uint8 // 0-100
 }
 
 // DMSUIMState represents the UIM state from a DMS Event Report indication.
@@ -114,9 +114,9 @@ func (s DMSUIMState) String() string {
 
 // DMSEventReportIndication represents the parsed content of a DMS Event Report indication.
 type DMSEventReportIndication struct {
-	PowerState       *DMSPowerState   // TLV 0x10
-	OperatingMode    *OperatingMode   // TLV 0x14
-	UIMState         *DMSUIMState     // TLV 0x15
+	PowerState    *DMSPowerState // TLV 0x10
+	OperatingMode *OperatingMode // TLV 0x14
+	UIMState      *DMSUIMState   // TLV 0x15
 }
 
 // ParseDMSEventReportIndication parses TLVs from a DMS Event Report indication.

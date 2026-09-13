@@ -19,7 +19,7 @@ import (
 
 const (
 	UIMWriteRecord       uint16 = 0x0023
-	UIMDepersonalization  uint16 = 0x0029
+	UIMDepersonalization uint16 = 0x0029
 	UIMGetConfiguration  uint16 = 0x003A
 )
 
@@ -31,10 +31,10 @@ const (
 type UIMDepersonalizationFeature uint8
 
 const (
-	UIMDepersoFeatureNetwork          UIMDepersonalizationFeature = 0
+	UIMDepersoFeatureNetwork         UIMDepersonalizationFeature = 0
 	UIMDepersoFeatureNetworkSubset   UIMDepersonalizationFeature = 1
 	UIMDepersoFeatureServiceProvider UIMDepersonalizationFeature = 2
-	UIMDepersoFeatureCorporate        UIMDepersonalizationFeature = 3
+	UIMDepersoFeatureCorporate       UIMDepersonalizationFeature = 3
 	UIMDepersoFeatureSIM             UIMDepersonalizationFeature = 4
 )
 
@@ -98,9 +98,9 @@ type UIMPersonalizationStatus struct {
 
 // UIMConfigResult contains the result of GetConfiguration.
 type UIMConfigResult struct {
-	AutoSelection        bool
+	AutoSelection         bool
 	PersonalizationStatus []UIMPersonalizationStatus
-	HaltSubscription     bool
+	HaltSubscription      bool
 }
 
 // ----------------------------------------------------------------------------

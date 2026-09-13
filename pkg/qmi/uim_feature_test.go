@@ -114,7 +114,7 @@ func cardStatusPacketWithApps(apps ...cardStatusTestApp) *Packet {
 		}
 		value = append(value,
 			app.appType, // app type
-			appState,   // app state
+			appState,    // app state
 			0x00,        // personalization state
 			0x00,        // personalization feature
 			0x00,        // personalization retries

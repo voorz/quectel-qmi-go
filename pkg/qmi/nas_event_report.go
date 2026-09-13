@@ -22,7 +22,7 @@ import (
 // NASEventReportConfig contains fine-grained event report settings.
 type NASEventReportConfig struct {
 	// Signal Strength Indicator (TLV 0x10)
-	SignalStrengthReport bool
+	SignalStrengthReport     bool
 	SignalStrengthThresholds []int8 // signed thresholds (dBm * -1 or similar)
 
 	// RF Band Information (TLV 0x11)

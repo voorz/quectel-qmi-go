@@ -106,15 +106,15 @@ func newQRTRTransport(newSocket func() (qrtrRawSocket, error), logf ClientLogFun
 	}
 
 	t := &qrtrTransport{
-		newSocket: newSocket,
-		ctrlSock:  ctrlSock,
+		newSocket:  newSocket,
+		ctrlSock:   ctrlSock,
 		ctrlTarget: sockaddrQRTR{node: local.node, port: qrtrPortCtrl},
 		logf:       logf,
 		services:   make(map[uint16]qrtrService),
 		clients:    make(map[uint16]*qrtrClient),
 		notifyCh:   make(chan struct{}),
-		rxCh:        make(chan []byte, qrtrRxQueueSize),
-		closeCh:     make(chan struct{}),
+		rxCh:       make(chan []byte, qrtrRxQueueSize),
+		closeCh:    make(chan struct{}),
 	}
 
 	t.wg.Add(1)

@@ -26,10 +26,10 @@ const (
 type WDSIPSupportType uint8
 
 const (
-	WDSIPSupportIPv4       WDSIPSupportType = 0
-	WDSIPSupportIPv6       WDSIPSupportType = 1
-	WDSIPSupportIPv4v6     WDSIPSupportType = 2
-	WDSIPSupportNonIP      WDSIPSupportType = 3
+	WDSIPSupportIPv4   WDSIPSupportType = 0
+	WDSIPSupportIPv6   WDSIPSupportType = 1
+	WDSIPSupportIPv4v6 WDSIPSupportType = 2
+	WDSIPSupportNonIP  WDSIPSupportType = 3
 )
 
 func (t WDSIPSupportType) String() string {
@@ -49,10 +49,10 @@ func (t WDSIPSupportType) String() string {
 
 // LTEAttachParameters holds the result of GetLTEAttachParameters.
 type LTEAttachParameters struct {
-	APN              string            // TLV 0x10: APN name
-	IPSupportType    WDSIPSupportType // TLV 0x11: IP support type
-	HasIPSupportType bool
-	OTAAttachPerformed bool            // TLV 0x12: whether OTA attach was performed
+	APN                string           // TLV 0x10: APN name
+	IPSupportType      WDSIPSupportType // TLV 0x11: IP support type
+	HasIPSupportType   bool
+	OTAAttachPerformed bool // TLV 0x12: whether OTA attach was performed
 	HasOTAAttach       bool
 }
 

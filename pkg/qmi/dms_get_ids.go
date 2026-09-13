@@ -21,9 +21,9 @@ const DMSGetIDs uint16 = 0x0025
 
 // DMSDeviceIDs holds the identifiers returned by GetIDs.
 type DMSDeviceIDs struct {
-	ESN               string // TLV 0x10: Electronic Serial Number
-	IMEI              string // TLV 0x11: International Mobile Equipment Identity (max 15 chars)
-	MEID              string // TLV 0x12: Mobile Equipment ID
+	ESN                 string // TLV 0x10: Electronic Serial Number
+	IMEI                string // TLV 0x11: International Mobile Equipment Identity (max 15 chars)
+	MEID                string // TLV 0x12: Mobile Equipment ID
 	IMEISoftwareVersion string // TLV 0x13: IMEI software version
 }
 

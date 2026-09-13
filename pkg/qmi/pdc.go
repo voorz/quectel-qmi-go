@@ -137,7 +137,7 @@ type PDCConfigEntry struct {
 type PDCConfigInfo struct {
 	TotalSize   uint32
 	Description string
-	Version    uint32
+	Version     uint32
 }
 
 // PDCConfigLimits represents storage limits from GetConfigLimits.
@@ -161,8 +161,8 @@ type PDCLoadConfigResult struct {
 
 // PDCDefaultConfigInfo represents the result of GetDefaultConfigInfo.
 type PDCDefaultConfigInfo struct {
-	Version    uint32
-	TotalSize  uint32
+	Version     uint32
+	TotalSize   uint32
 	Description string
 }
 
@@ -179,8 +179,8 @@ type PDCService struct {
 	tokenCounter atomic.Uint32
 
 	// pending indication waiters: token → channel
-	mu       sync.Mutex
-	waiters  map[uint32]chan *pdcIndication
+	mu      sync.Mutex
+	waiters map[uint32]chan *pdcIndication
 }
 
 // pdcIndication is the internal struct passed to waiters.
@@ -201,9 +201,9 @@ func NewPDCServiceWithContext(ctx context.Context, client *Client) (*PDCService,
 		return nil, err
 	}
 	svc := &PDCService{
-		client:  client,
+		client:   client,
 		clientID: clientID,
-		waiters: make(map[uint32]chan *pdcIndication),
+		waiters:  make(map[uint32]chan *pdcIndication),
 	}
 	// Register indication handler for PDC service
 	client.RegisterServiceIndicationHandler(ServicePDC, svc.handleIndication)
@@ -649,5 +649,3 @@ func parsePDCConfigEntries(data []byte) []PDCConfigEntry {
 	}
 	return entries
 }
-
-

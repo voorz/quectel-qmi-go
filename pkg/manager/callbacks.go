@@ -119,11 +119,11 @@ func (e EventType) String() string {
 		return "UIMRefresh"
 	case EventUIMSlotStatus:
 		return "UIMSlotStatus"
-case EventUnknownIndication:
-	return "UnknownIndication"
-case EventRecoveryExhausted:
-	return "RecoveryExhausted"
-default:
+	case EventUnknownIndication:
+		return "UnknownIndication"
+	case EventRecoveryExhausted:
+		return "RecoveryExhausted"
+	default:
 		return "Unknown"
 	}
 }

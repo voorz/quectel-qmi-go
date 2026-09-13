@@ -31,16 +31,16 @@ const (
 // ============================================================================
 
 const (
-	TLVWDSPrimaryDNSv4   uint8 = 0x15
-	TLVWDSSecondaryDNSv4 uint8 = 0x16
-	TLVWDSIPv4Address    uint8 = 0x1E
-	TLVWDSIPv4Gateway    uint8 = 0x20
-	TLVWDSIPv4Subnet     uint8 = 0x21
-	TLVWDSIPv6Address    uint8 = 0x25
-	TLVWDSIPv6Gateway    uint8 = 0x26
-	TLVWDSPrimaryDNSv6   uint8 = 0x27
-	TLVWDSSecondaryDNSv6 uint8 = 0x28
-	TLVWDSMtu            uint8 = 0x29
+	TLVWDSPrimaryDNSv4        uint8 = 0x15
+	TLVWDSSecondaryDNSv4      uint8 = 0x16
+	TLVWDSIPv4Address         uint8 = 0x1E
+	TLVWDSIPv4Gateway         uint8 = 0x20
+	TLVWDSIPv4Subnet          uint8 = 0x21
+	TLVWDSIPv6Address         uint8 = 0x25
+	TLVWDSIPv6Gateway         uint8 = 0x26
+	TLVWDSPrimaryDNSv6        uint8 = 0x27
+	TLVWDSSecondaryDNSv6      uint8 = 0x28
+	TLVWDSMtu                 uint8 = 0x29
 	TLVWDSIPv6DelegatedPrefix uint8 = 0x57
 	// P-CSCF / IMCN TLVs (from libqmi qmi-service-wds.json)
 	TLVWDSPCSCFUsingPCO         uint8 = 0x22
@@ -52,23 +52,23 @@ const (
 
 // Runtime settings mask bits / 运行时设置掩码位
 const (
-	RuntimeMaskProfileID   uint32 = 1 << 0
-	RuntimeMaskProfileName uint32 = 1 << 1
-	RuntimeMaskPDPType     uint32 = 1 << 2
-	RuntimeMaskAPNName     uint32 = 1 << 3
-	RuntimeMaskDNS         uint32 = 1 << 4
-	RuntimeMaskQoS         uint32 = 1 << 5
-	RuntimeMaskUsername    uint32 = 1 << 6
-	RuntimeMaskAuth        uint32 = 1 << 7
-	RuntimeMaskIPAddr      uint32 = 1 << 8
-	RuntimeMaskGateway     uint32 = 1 << 9
-	RuntimeMaskPCSCFPCO    uint32 = 1 << 10
-	RuntimeMaskPCSCFAddr   uint32 = 1 << 11
-	RuntimeMaskPCSCFDomain uint32 = 1 << 12
-	RuntimeMaskMTU         uint32 = 1 << 13
-	RuntimeMaskDomainName  uint32 = 1 << 14
-	RuntimeMaskIPFamily    uint32 = 1 << 15
-	RuntimeMaskIMCN        uint32 = 1 << 16
+	RuntimeMaskProfileID           uint32 = 1 << 0
+	RuntimeMaskProfileName         uint32 = 1 << 1
+	RuntimeMaskPDPType             uint32 = 1 << 2
+	RuntimeMaskAPNName             uint32 = 1 << 3
+	RuntimeMaskDNS                 uint32 = 1 << 4
+	RuntimeMaskQoS                 uint32 = 1 << 5
+	RuntimeMaskUsername            uint32 = 1 << 6
+	RuntimeMaskAuth                uint32 = 1 << 7
+	RuntimeMaskIPAddr              uint32 = 1 << 8
+	RuntimeMaskGateway             uint32 = 1 << 9
+	RuntimeMaskPCSCFPCO            uint32 = 1 << 10
+	RuntimeMaskPCSCFAddr           uint32 = 1 << 11
+	RuntimeMaskPCSCFDomain         uint32 = 1 << 12
+	RuntimeMaskMTU                 uint32 = 1 << 13
+	RuntimeMaskDomainName          uint32 = 1 << 14
+	RuntimeMaskIPFamily            uint32 = 1 << 15
+	RuntimeMaskIMCN                uint32 = 1 << 16
 	RuntimeMaskExtendedTechnology  uint32 = 1 << 17
 	RuntimeMaskOperatorReservedPCO uint32 = 1 << 18
 )
@@ -82,8 +82,8 @@ type WDSService struct {
 	clientID             uint8
 	ProfileIndex         uint8
 	TechnologyPreference uint16 // Bitmask: 0x8000=3GPP, 0x4000=3GPP2
-	CallType             uint8 // WDS TLV 0x35 (0=laptop, 1=embedded)
-	HasCallType          bool  // gates CallType since 0 is a valid value
+	CallType             uint8  // WDS TLV 0x35 (0=laptop, 1=embedded)
+	HasCallType          bool   // gates CallType since 0 is a valid value
 }
 
 const AnyPacketDataHandle uint32 = ^uint32(0)
@@ -499,26 +499,26 @@ func ParsePacketServiceStatusIndication(packet *Packet) (ConnectionStatus, error
 
 // RuntimeSettings contains IP configuration from the network / RuntimeSettings包含来自网络的IP配置
 type RuntimeSettings struct {
-	IPv4Address net.IP
-	IPv4Subnet  net.IPMask
-	IPv4Gateway net.IP
-	IPv4DNS1    net.IP
-	IPv4DNS2    net.IP
-	IPv6Address net.IP
-	IPv6Prefix  int
-	IPv6Gateway net.IP
-	IPv6DNS1    net.IP
-	IPv6DNS2    net.IP
+	IPv4Address            net.IP
+	IPv4Subnet             net.IPMask
+	IPv4Gateway            net.IP
+	IPv4DNS1               net.IP
+	IPv4DNS2               net.IP
+	IPv6Address            net.IP
+	IPv6Prefix             int
+	IPv6Gateway            net.IP
+	IPv6DNS1               net.IP
+	IPv6DNS2               net.IP
 	IPv6DelegatedPrefix    net.IP
 	IPv6DelegatedPrefixLen int
 	MTU                    int
-	PCSCFUsingPCO    bool
-	HasPCSCFUsingPCO bool
-	PCSCFv4          []net.IP
-	PCSCFv6          []net.IP
-	PCSCFDomains     []string
-	IMCN             bool
-	ResponseTLVs     []TLV
+	PCSCFUsingPCO          bool
+	HasPCSCFUsingPCO       bool
+	PCSCFv4                []net.IP
+	PCSCFv6                []net.IP
+	PCSCFDomains           []string
+	IMCN                   bool
+	ResponseTLVs           []TLV
 }
 
 func parsePacketServiceStatusPacket(packet *Packet, checkResult bool) (ConnectionStatus, error) {
